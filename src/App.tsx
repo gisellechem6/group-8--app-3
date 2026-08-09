@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Invoice, FilterOptions, DashboardMetrics, InvoiceStatus, ReminderStage } from './types';
-import { initialInvoices, sampleInvoices } from './data/initialInvoices';
+import { initialInvoices } from './data/initialInvoices';
 import { calculateDueDate, auditInvoiceData, getDaysUntilDue, formatSingaporeDate, getEligibleReminderStage, calculateThreeWayMatch } from './utils/dateUtils';
 import { Navbar } from './components/Navbar';
 import { Sidebar, StatusCounts } from './components/Sidebar';
@@ -12,6 +12,9 @@ import { ReminderReviewModal } from './components/ReminderReviewModal';
 import { AIAssistantDrawer } from './components/AIAssistantDrawer';
 import { DocumentExtractorModal } from './components/DocumentExtractorModal';
 import { ConfirmationModal } from './components/ConfirmationModal';
+import { GoogleWorkspaceModal } from './components/GoogleWorkspaceModal';
+import { SyncSummaryModal, SyncSummaryData } from './components/SyncSummaryModal';
+import { appendApprovedInvoiceToGoogleSheet, appendInvoiceToGoogleSheet, getAccessToken, fetchGoogleSheetsWithDebug, TARGET_MADAM_LIM_SHEET_ID, googleSignIn } from './utils/googleWorkspace';
 import { CheckCircle, Send, BellRing, ShieldCheck, FileCheck, Check, AlertTriangle, Clock, CheckCircle2, PauseCircle, HelpCircle, FileX } from 'lucide-react';
 
 export default function App() {
@@ -34,6 +37,511 @@ export default function App() {
   
   const [reminderModalInvoice, setReminderModalInvoice] = useState<Invoice | null>(null);
   const [isAIAssistantOpen, setIsAIAssistantOpen] = useState<boolean>(false);
+  const [isGoogleWorkspaceOpen, setIsGoogleWorkspaceOpen] = useState<boolean>(false);
+  const [isSyncingSheets, setIsSyncingSheets] = useState<boolean>(false);
+  const [isRetrievingMatchResults, setIsRetrievingMatchResults] = useState<boolean>(false);
+  const [syncSummaryData, setSyncSummaryData] = useState<SyncSummaryData | null>(null);
+  const [isSyncSummaryOpen, setIsSyncSummaryOpen] = useState<boolean>(false);
+
+  const handleRetrieveMatchResults = async () => {
+    setIsRetrievingMatchResults(true);
+    try {
+      // Ensure we are authenticated first, sequentially, to prevent concurrent popups and browser popup blocking
+      let token = await getAccessToken();
+      if (!token) {
+        showToast('Google Workspace authentication required. Opening sign-in popup...');
+        const authRes = await googleSignIn();
+        if (!authRes?.accessToken) {
+          throw new Error('Google Workspace authentication failed. Please try again.');
+        }
+      }
+
+      showToast('Retrieving invoices from Reviewed_Invoices and Match_Results...');
+      
+      const [resReviewed, resMatch] = await Promise.all([
+        fetchGoogleSheetsWithDebug(
+          TARGET_MADAM_LIM_SHEET_ID,
+          0,
+          'Reviewed_Invoices'
+        ),
+        fetchGoogleSheetsWithDebug(
+          TARGET_MADAM_LIM_SHEET_ID,
+          1695302381,
+          'Match_Results'
+        )
+      ]);
+
+      if (!resReviewed.success && !resMatch.success) {
+        const fullErr = resReviewed.error || resMatch.error || 'Failed to connect to Google Sheets API.';
+        setSyncSummaryData({
+          success: false,
+          addedCount: 0,
+          updatedCount: 0,
+          needsReviewCount: 0,
+          totalRowsProcessed: 0,
+          spreadsheetId: TARGET_MADAM_LIM_SHEET_ID,
+          fullError: fullErr,
+        });
+        setIsSyncSummaryOpen(true);
+        if (fullErr.includes('401') || fullErr.toLowerCase().includes('expired') || fullErr.toLowerCase().includes('authentication')) {
+          setIsGoogleWorkspaceOpen(true);
+        }
+        showToast(`Retrieval Failed: ${fullErr.substring(0, 80)}`);
+        return;
+      }
+
+      const reviewedInvoices = resReviewed.success ? (resReviewed.invoices || []) : [];
+      const matchInvoices = resMatch.success ? (resMatch.invoices || []) : [];
+
+      // Create a map of normalized invoice numbers from Match_Results to their invoice records
+      const matchInvoicesMap = new Map<string, any>();
+      matchInvoices.forEach((inv) => {
+        const num = (inv.invoiceNumber || '').toString().trim().toLowerCase();
+        if (num) {
+          matchInvoicesMap.set(num, inv);
+        }
+      });
+
+      // Create a set of normalized invoice numbers from Match_Results
+      const matchInvoiceNumbers = new Set(matchInvoicesMap.keys());
+
+      let updatedCount = 0;
+      let addedCount = 0;
+      let totalNeedsReviewInSync = 0;
+
+      setInvoices((prevInvoices) => {
+        const existingMap = new Map<string, Invoice>();
+        prevInvoices.forEach((inv) => {
+          if (inv.invoiceNumber) {
+            existingMap.set(inv.invoiceNumber.trim().toLowerCase(), inv);
+          }
+        });
+
+        const newList: Invoice[] = [];
+
+        reviewedInvoices.forEach((sheetInv, idx) => {
+          const invNumKey = (sheetInv.invoiceNumber || '').trim().toLowerCase();
+          if (!invNumKey) return;
+
+          const matchInv = matchInvoicesMap.get(invNumKey);
+          const isMatchResult = !!matchInv;
+
+          // If in Match_Results, status must be 'Ready for Payment'.
+          // Otherwise, if it is 'Ready for Payment' but not in Match_Results, change to 'Unpaid'.
+          let computedStatus = sheetInv.status || 'Unpaid';
+          if (isMatchResult) {
+            computedStatus = 'Ready for Payment';
+          } else if (computedStatus === 'Ready for Payment') {
+            computedStatus = 'Unpaid';
+          }
+
+          const existing = existingMap.get(invNumKey);
+          if (existing) {
+            updatedCount++;
+            const appDate = sheetInv.approvalDate || existing.approvalDate;
+            const pTerms = sheetInv.paymentTerms || existing.paymentTerms;
+            const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
+
+            // Ensure GRN is recorded if status is Ready for Payment
+            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined) || existing.grnNumber;
+            if (computedStatus === 'Ready for Payment' && !grn) {
+              const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
+              grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
+            }
+
+            // Dynamically audit the merged invoice with the newly assigned/available fields
+            const audit = auditInvoiceData({
+              ...existing,
+              supplierName: sheetInv.supplierName || existing.supplierName,
+              amount: sheetInv.amount !== undefined && sheetInv.amount !== null ? sheetInv.amount : existing.amount,
+              invoiceDate: sheetInv.invoiceDate || existing.invoiceDate,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate || existing.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              bankDetails: sheetInv.bankDetails || existing.bankDetails,
+              poNumber: sheetInv.poNumber || existing.poNumber,
+              grnNumber: grn,
+            });
+
+            const isReview = audit.needsReview;
+            if (isReview) totalNeedsReviewInSync++;
+
+            const updatedInvoice: Invoice = {
+              ...existing,
+              supplierName: sheetInv.supplierName || existing.supplierName,
+              amount: sheetInv.amount !== undefined && sheetInv.amount !== null ? sheetInv.amount : existing.amount,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate || existing.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              bankDetails: sheetInv.bankDetails || existing.bankDetails,
+              poNumber: sheetInv.poNumber || existing.poNumber,
+              grnNumber: grn,
+              notes: sheetInv.notes || 'Retrieved from Google Sheet',
+              needsReview: isReview,
+              reviewReasons: audit.reviewReasons,
+              history: [
+                {
+                  id: String(Date.now() + Math.random() + idx),
+                  timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
+                  user: 'Madam Lim (Accounts Executive)',
+                  action: 'Synced from Google Sheets',
+                  details: `Synced invoice details from Google Sheet. Status set to ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  type: 'edit',
+                },
+                ...existing.history,
+              ],
+            };
+            newList.push(updatedInvoice);
+          } else {
+            addedCount++;
+            const appDate = sheetInv.approvalDate || new Date().toISOString().split('T')[0];
+            const pTerms = sheetInv.paymentTerms || 'Net 30';
+            const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
+
+            // Ensure GRN is recorded if status is Ready for Payment
+            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined);
+            if (computedStatus === 'Ready for Payment' && !grn) {
+              const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
+              grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
+            }
+
+            // Dynamically audit the new invoice with the assigned fields
+            const audit = auditInvoiceData({
+              supplierName: sheetInv.supplierName || 'Imported Vendor',
+              invoiceNumber: sheetInv.invoiceNumber!,
+              invoiceDate: sheetInv.invoiceDate || appDate,
+              amount: sheetInv.amount || 0,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              bankDetails: sheetInv.bankDetails,
+              poNumber: sheetInv.poNumber,
+              grnNumber: grn,
+            });
+
+            const isReview = audit.needsReview;
+            if (isReview) totalNeedsReviewInSync++;
+
+            const newId = `inv-mr-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 9)}`;
+            const newInvoice: Invoice = {
+              id: newId,
+              supplierName: sheetInv.supplierName || 'Imported Vendor',
+              invoiceNumber: sheetInv.invoiceNumber!,
+              invoiceDate: sheetInv.invoiceDate || appDate,
+              currency: 'SGD',
+              amount: sheetInv.amount || 0,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              poNumber: sheetInv.poNumber,
+              poAmount: sheetInv.poAmount,
+              grnNumber: grn,
+              grnVerified: sheetInv.grnVerified ?? true,
+              bankDetails: sheetInv.bankDetails,
+              contactEmail: sheetInv.contactEmail,
+              reminders: [],
+              history: [
+                {
+                  id: String(Date.now() + Math.random() + idx),
+                  timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
+                  user: 'Madam Lim (Accounts Executive)',
+                  action: 'Imported from Sheets',
+                  details: `Imported invoice from Google Sheet (Reviewed_Invoices). Status is ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  type: 'creation',
+                },
+              ],
+              notes: sheetInv.notes || 'Retrieved from Google Sheet',
+              needsReview: isReview,
+              reviewReasons: audit.reviewReasons,
+            };
+            newList.push(newInvoice);
+          }
+        });
+
+        return newList;
+      });
+
+      setSyncSummaryData({
+        success: true,
+        addedCount,
+        updatedCount,
+        needsReviewCount: totalNeedsReviewInSync,
+        totalRowsProcessed: (resReviewed.rowsRetrieved || 0) + (resMatch.rowsRetrieved || 0),
+        sheetName: 'Reviewed_Invoices & Match_Results',
+        spreadsheetId: TARGET_MADAM_LIM_SHEET_ID,
+      });
+      setIsSyncSummaryOpen(true);
+      showToast(`Retrieved ${reviewedInvoices.length} invoices. (${matchInvoiceNumbers.size} Ready for Payment)`);
+      setActiveView('ledger');
+      setFilters((prev) => ({ ...prev, status: 'Ready for Payment', needsReviewOnly: false, dueCategory: 'all' }));
+    } catch (err: any) {
+      console.error('Error retrieving worksheets:', err);
+      showToast(`Error retrieving worksheets: ${err.message || String(err)}`);
+    } finally {
+      setIsRetrievingMatchResults(false);
+    }
+  };
+
+  const handleSyncFromGoogleSheets = async () => {
+    setIsSyncingSheets(true);
+    try {
+      // Ensure we are authenticated first, sequentially, to prevent concurrent popups and browser popup blocking
+      let token = await getAccessToken();
+      if (!token) {
+        showToast('Google Workspace authentication required. Opening sign-in popup...');
+        const authRes = await googleSignIn();
+        if (!authRes?.accessToken) {
+          throw new Error('Google Workspace authentication failed. Please try again.');
+        }
+      }
+
+      showToast('Syncing invoices from Google Sheets...');
+      
+      const [resReviewed, resMatch] = await Promise.all([
+        fetchGoogleSheetsWithDebug(
+          TARGET_MADAM_LIM_SHEET_ID,
+          0,
+          'Reviewed_Invoices'
+        ),
+        fetchGoogleSheetsWithDebug(
+          TARGET_MADAM_LIM_SHEET_ID,
+          1695302381,
+          'Match_Results'
+        )
+      ]);
+
+      if (!resReviewed.success && !resMatch.success) {
+        const fullErr = resReviewed.error || resMatch.error || 'Failed to connect to Google Sheets API.';
+        setSyncSummaryData({
+          success: false,
+          addedCount: 0,
+          updatedCount: 0,
+          needsReviewCount: 0,
+          totalRowsProcessed: 0,
+          spreadsheetId: TARGET_MADAM_LIM_SHEET_ID,
+          fullError: fullErr,
+        });
+        setIsSyncSummaryOpen(true);
+        if (fullErr.includes('401') || fullErr.toLowerCase().includes('expired') || fullErr.toLowerCase().includes('authentication')) {
+          setIsGoogleWorkspaceOpen(true);
+        }
+        showToast(`Sync Failed: ${fullErr.substring(0, 80)}`);
+        return;
+      }
+
+      const reviewedInvoices = resReviewed.success ? (resReviewed.invoices || []) : [];
+      const matchInvoices = resMatch.success ? (resMatch.invoices || []) : [];
+
+      // Create a map of normalized invoice numbers from Match_Results to their invoice records
+      const matchInvoicesMap = new Map<string, any>();
+      matchInvoices.forEach((inv) => {
+        const num = (inv.invoiceNumber || '').toString().trim().toLowerCase();
+        if (num) {
+          matchInvoicesMap.set(num, inv);
+        }
+      });
+
+      // Create a set of normalized invoice numbers from Match_Results
+      const matchInvoiceNumbers = new Set(matchInvoicesMap.keys());
+
+      let updatedCount = 0;
+      let addedCount = 0;
+      let totalNeedsReviewInSync = 0;
+
+      setInvoices((prevInvoices) => {
+        const existingMap = new Map<string, Invoice>();
+        prevInvoices.forEach((inv) => {
+          if (inv.invoiceNumber) {
+            existingMap.set(inv.invoiceNumber.trim().toLowerCase(), inv);
+          }
+        });
+
+        const newList: Invoice[] = [];
+
+        reviewedInvoices.forEach((sheetInv, idx) => {
+          const invNumKey = (sheetInv.invoiceNumber || '').trim().toLowerCase();
+          if (!invNumKey) return;
+
+          const matchInv = matchInvoicesMap.get(invNumKey);
+          const isMatchResult = !!matchInv;
+
+          let computedStatus = sheetInv.status || 'Unpaid';
+          if (isMatchResult) {
+            computedStatus = 'Ready for Payment';
+          } else if (computedStatus === 'Ready for Payment') {
+            computedStatus = 'Unpaid';
+          }
+
+          const existing = existingMap.get(invNumKey);
+          if (existing) {
+            updatedCount++;
+            const appDate = sheetInv.approvalDate || existing.approvalDate;
+            const pTerms = sheetInv.paymentTerms || existing.paymentTerms;
+            const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
+
+            // Ensure GRN is recorded if status is Ready for Payment
+            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined) || existing.grnNumber;
+            if (computedStatus === 'Ready for Payment' && !grn) {
+              const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
+              grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
+            }
+
+            // Dynamically audit the merged invoice with the newly assigned/available fields
+            const audit = auditInvoiceData({
+              ...existing,
+              supplierName: sheetInv.supplierName || existing.supplierName,
+              amount: sheetInv.amount !== undefined && sheetInv.amount !== null ? sheetInv.amount : existing.amount,
+              invoiceDate: sheetInv.invoiceDate || existing.invoiceDate,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate || existing.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              bankDetails: sheetInv.bankDetails || existing.bankDetails,
+              poNumber: sheetInv.poNumber || existing.poNumber,
+              grnNumber: grn,
+            });
+
+            const isReview = audit.needsReview;
+            if (isReview) totalNeedsReviewInSync++;
+
+            const updatedInvoice: Invoice = {
+              ...existing,
+              supplierName: sheetInv.supplierName || existing.supplierName,
+              amount: sheetInv.amount !== undefined && sheetInv.amount !== null ? sheetInv.amount : existing.amount,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate || existing.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              bankDetails: sheetInv.bankDetails || existing.bankDetails,
+              poNumber: sheetInv.poNumber || existing.poNumber,
+              grnNumber: grn,
+              notes: sheetInv.notes || 'Retrieved from Google Sheet',
+              needsReview: isReview,
+              reviewReasons: audit.reviewReasons,
+              history: [
+                {
+                  id: String(Date.now() + Math.random() + idx),
+                  timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
+                  user: 'Madam Lim (Accounts Executive)',
+                  action: 'Synced from Google Sheets',
+                  details: `Synced invoice details from Google Sheet. Status set to ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  type: 'edit',
+                },
+                ...existing.history,
+              ],
+            };
+            newList.push(updatedInvoice);
+          } else {
+            addedCount++;
+            const appDate = sheetInv.approvalDate || new Date().toISOString().split('T')[0];
+            const pTerms = sheetInv.paymentTerms || 'Net 30';
+            const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
+
+            // Ensure GRN is recorded if status is Ready for Payment
+            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined);
+            if (computedStatus === 'Ready for Payment' && !grn) {
+              const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
+              grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
+            }
+
+            // Dynamically audit the new invoice with the assigned fields
+            const audit = auditInvoiceData({
+              supplierName: sheetInv.supplierName || 'Imported Vendor',
+              invoiceNumber: sheetInv.invoiceNumber!,
+              invoiceDate: sheetInv.invoiceDate || appDate,
+              amount: sheetInv.amount || 0,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              bankDetails: sheetInv.bankDetails,
+              poNumber: sheetInv.poNumber,
+              grnNumber: grn,
+            });
+
+            const isReview = audit.needsReview;
+            if (isReview) totalNeedsReviewInSync++;
+
+            const newId = `inv-mr-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 9)}`;
+            const newInvoice: Invoice = {
+              id: newId,
+              supplierName: sheetInv.supplierName || 'Imported Vendor',
+              invoiceNumber: sheetInv.invoiceNumber!,
+              invoiceDate: sheetInv.invoiceDate || appDate,
+              currency: 'SGD',
+              amount: sheetInv.amount || 0,
+              approvalDate: appDate,
+              paymentTerms: pTerms,
+              fixedDueDate: sheetInv.fixedDueDate,
+              calculatedDueDate: calcDue,
+              status: computedStatus,
+              poNumber: sheetInv.poNumber,
+              poAmount: sheetInv.poAmount,
+              grnNumber: grn,
+              grnVerified: sheetInv.grnVerified ?? true,
+              bankDetails: sheetInv.bankDetails,
+              contactEmail: sheetInv.contactEmail,
+              reminders: [],
+              history: [
+                {
+                  id: String(Date.now() + Math.random() + idx),
+                  timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
+                  user: 'Madam Lim (Accounts Executive)',
+                  action: 'Imported from Sheets',
+                  details: `Imported invoice from Google Sheet (Reviewed_Invoices). Status is ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  type: 'creation',
+                },
+              ],
+              notes: sheetInv.notes || 'Retrieved from Google Sheet',
+              needsReview: isReview,
+              reviewReasons: audit.reviewReasons,
+            };
+            newList.push(newInvoice);
+          }
+        });
+
+        return newList;
+      });
+
+      setSyncSummaryData({
+        success: true,
+        addedCount,
+        updatedCount,
+        needsReviewCount: totalNeedsReviewInSync,
+        totalRowsProcessed: (resReviewed.rowsRetrieved || 0) + (resMatch.rowsRetrieved || 0),
+        sheetName: 'Reviewed_Invoices & Match_Results',
+        spreadsheetId: TARGET_MADAM_LIM_SHEET_ID,
+      });
+      setIsSyncSummaryOpen(true);
+      showToast(`Sync Completed: ${reviewedInvoices.length} invoices synced. (${matchInvoiceNumbers.size} Ready for Payment)`);
+    } catch (err: any) {
+      const fullErr = `Sync Exception: ${err.message || String(err)}`;
+      setSyncSummaryData({
+        success: false,
+        addedCount: 0,
+        updatedCount: 0,
+        needsReviewCount: 0,
+        totalRowsProcessed: 0,
+        spreadsheetId: TARGET_MADAM_LIM_SHEET_ID,
+        fullError: fullErr,
+      });
+      setIsSyncSummaryOpen(true);
+      showToast(`Sync Error: ${err.message || 'Error syncing Google Sheets'}`);
+    } finally {
+      setIsSyncingSheets(false);
+    }
+  };
 
   const [confirmModalState, setConfirmModalState] = useState<{
     isOpen: boolean;
@@ -95,11 +603,11 @@ export default function App() {
       }
 
       const match = calculateThreeWayMatch(inv);
-      if (inv.status === 'Unpaid') {
+      if (inv.status === 'Unpaid' || inv.status === 'Ready for Payment') {
         unpaid++;
         totalUnpaidAmount += amt;
 
-        if (match.readyForPayment) {
+        if (inv.status === 'Ready for Payment') {
           readyForPayment++;
           readyForPaymentAmount += amt;
         }
@@ -189,7 +697,7 @@ export default function App() {
     if (filters.dueCategory === 'due_within_7') return 'Due Within 7 Days';
     if (filters.dueCategory === 'due_today') return 'Invoices Due Today';
     if (filters.dueCategory === 'overdue') return 'Overdue Invoices';
-    if (filters.status === 'ReadyForPayment') return 'Ready for Payment (3-Way Matched)';
+    if (filters.status === 'ReadyForPayment' || filters.status === 'Ready for Payment') return 'Ready for Payment Invoices';
     if (filters.status === 'Unpaid') return 'Unpaid Invoices';
     if (filters.status === 'Paid') return 'Paid / Settled Invoices';
     if (filters.status === 'On Hold') return 'On Hold Invoices';
@@ -240,8 +748,8 @@ export default function App() {
 
       // Status Pill
       if (filters.status !== 'ALL') {
-        if (filters.status === 'ReadyForPayment') {
-          if (!match.readyForPayment || inv.status !== 'Unpaid') return false;
+        if (filters.status === 'ReadyForPayment' || filters.status === 'Ready for Payment') {
+          if (inv.status !== 'Ready for Payment') return false;
         } else if (inv.status !== filters.status) {
           return false;
         }
@@ -254,9 +762,9 @@ export default function App() {
 
       // Card Category Filter
       if (filters.dueCategory !== 'all') {
-        if (filters.dueCategory === 'all_unpaid' && inv.status !== 'Unpaid') return false;
+        if (filters.dueCategory === 'all_unpaid' && inv.status !== 'Unpaid' && inv.status !== 'Ready for Payment') return false;
         if (filters.dueCategory === 'needs_review' && !inv.needsReview) return false;
-        if (filters.dueCategory === 'ready_for_payment' && (!match.readyForPayment || inv.status !== 'Unpaid')) return false;
+        if (filters.dueCategory === 'ready_for_payment' && inv.status !== 'Ready for Payment') return false;
 
         if (inv.status === 'Unpaid' && inv.calculatedDueDate) {
           const daysLeft = getDaysUntilDue(inv.calculatedDueDate);
@@ -333,9 +841,9 @@ export default function App() {
         const historyEntry = {
           id: String(Date.now()),
           timestamp,
-          user: 'Giselle Chem (Staff)',
+          user: 'Madam Lim (Accounts Executive)',
           action: `Status changed to ${newStatus}`,
-          details: reason ? `Reason: ${reason}` : `Invoice status changed to ${newStatus} after staff confirmation.`,
+          details: reason ? `Reason: ${reason}` : `Invoice status changed to ${newStatus} after Madam Lim confirmation.`,
           type: newStatus === 'On Hold' ? ('hold' as const) : ('status_change' as const),
         };
 
@@ -350,6 +858,17 @@ export default function App() {
           setSelectedInvoice(updated);
         }
 
+        // Auto-sync to Madam Lim's Google Sheet if status changed to Paid/Approved
+        if (newStatus === 'Paid') {
+          appendApprovedInvoiceToGoogleSheet(updated)
+            .then((res) => {
+              showToast(`Auto-synced row to Madam Lim's Google Sheet!`);
+            })
+            .catch((err) => {
+              console.log('Google Sheets auto-sync notice:', err?.message);
+            });
+        }
+
         return updated;
       })
     );
@@ -358,7 +877,7 @@ export default function App() {
   };
 
   // Handler: Save Invoice (Add or Edit)
-  const handleSaveInvoice = (invoiceData: Partial<Invoice>) => {
+  const handleSaveInvoice = async (invoiceData: Partial<Invoice>) => {
     const timestamp = new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' });
 
     if (editingInvoice) {
@@ -370,9 +889,9 @@ export default function App() {
           const historyEntry = {
             id: String(Date.now()),
             timestamp,
-            user: 'Giselle Chem (Staff)',
+            user: 'Madam Lim (Accounts Executive)',
             action: 'Invoice Details Updated',
-            details: 'Supplier invoice details updated manually by staff.',
+            details: 'Supplier invoice details updated manually by Madam Lim / Finance team.',
             type: 'edit' as const,
           };
 
@@ -397,7 +916,6 @@ export default function App() {
             ...invoiceData,
           });
 
-          // If 3-way match fails and status is not Paid/Cancelled/Disputed, set status to On Hold
           let newStatus = inv.status;
           if (newStatus !== 'Paid' && newStatus !== 'Cancelled' && newStatus !== 'Disputed') {
             if (match.status !== 'Matched') {
@@ -428,76 +946,21 @@ export default function App() {
       );
       showToast('Supplier invoice updated successfully.');
     } else {
-      // Create new
-      const newId = 'inv-' + Date.now();
-      const calcDue = calculateDueDate(
-        invoiceData.invoiceDate,
-        invoiceData.paymentTerms || 'Net 30',
-        invoiceData.fixedDueDate
-      );
-      const audit = auditInvoiceData({
-        supplierName: invoiceData.supplierName,
-        invoiceNumber: invoiceData.invoiceNumber,
-        invoiceDate: invoiceData.invoiceDate,
-        approvalDate: invoiceData.approvalDate,
-        amount: invoiceData.amount,
-        paymentTerms: invoiceData.paymentTerms,
-        fixedDueDate: invoiceData.fixedDueDate,
-        bankDetails: invoiceData.bankDetails,
-      });
+      // Create new: Write directly to Google Sheets Approved_For_Payment worksheet tab
+      const sheetRes = await appendInvoiceToGoogleSheet(invoiceData);
 
-      const match = calculateThreeWayMatch({
-        supplierName: invoiceData.supplierName,
-        invoiceNumber: invoiceData.invoiceNumber,
-        invoiceDate: invoiceData.invoiceDate,
-        amount: invoiceData.amount,
-        poNumber: invoiceData.poNumber,
-        poAmount: invoiceData.poAmount,
-        grnNumber: invoiceData.grnNumber,
-        grnVerified: invoiceData.grnVerified,
-        needsReview: audit.needsReview,
-      });
+      if (!sheetRes.success) {
+        showToast(sheetRes.userMessage || sheetRes.error || 'Failed to write invoice to Google Sheets.');
+        alert(sheetRes.userMessage || sheetRes.error);
+        if (sheetRes.code === 'INCOMPLETE' || sheetRes.code === 'DUPLICATE') {
+          return;
+        }
+      } else {
+        showToast('Invoice successfully added to Google Sheets.');
+      }
 
-      const initialStatus: InvoiceStatus = match.status === 'Matched' ? 'Unpaid' : 'On Hold';
-
-      const historyEntry = {
-        id: String(Date.now()),
-        timestamp,
-        user: 'Giselle Chem (Staff)',
-        action: 'Invoice Created',
-        details: `Approved supplier invoice added. Three-Way Match: ${match.status}.${match.status !== 'Matched' ? ' Automatically placed On Hold.' : ''}`,
-        type: match.status !== 'Matched' ? ('hold' as const) : ('creation' as const),
-      };
-
-      const newInv: Invoice = {
-        id: newId,
-        supplierName: invoiceData.supplierName || 'New Supplier',
-        invoiceNumber: invoiceData.invoiceNumber || 'INV-DRAFT',
-        invoiceDate: invoiceData.invoiceDate || '',
-        approvalDate: invoiceData.approvalDate || '',
-        amount: invoiceData.amount || 0,
-        currency: 'SGD',
-        paymentTerms: invoiceData.paymentTerms || 'Net 30',
-        fixedDueDate: invoiceData.fixedDueDate,
-        calculatedDueDate: calcDue,
-        status: initialStatus,
-        bankDetails: invoiceData.bankDetails || '',
-        poNumber: invoiceData.poNumber,
-        poAmount: invoiceData.poAmount,
-        grnNumber: invoiceData.grnNumber,
-        grnVerified: invoiceData.grnVerified,
-        threeWayMatchStatus: match.status,
-        readyForPayment: match.readyForPayment,
-        notes: invoiceData.notes,
-        contactEmail: invoiceData.contactEmail,
-        needsReview: audit.needsReview,
-        reviewReasons: audit.reviewReasons,
-        history: [historyEntry],
-        reminders: [],
-      };
-
-      setInvoices((prev) => [newInv, ...prev]);
-      showToast('New approved supplier invoice registered.');
+      // Refresh dashboard from Google Sheets
+      await handleSyncFromGoogleSheets();
     }
 
     setEditingInvoice(null);
@@ -526,15 +989,15 @@ export default function App() {
           body,
           status: 'Sent' as const,
           sentAt: timestamp,
-          sentBy: 'Giselle Chem (Staff)',
+          sentBy: 'Madam Lim (Accounts Executive)',
         };
 
         const historyEntry = {
           id: String(Date.now()),
           timestamp,
-          user: 'Giselle Chem (Staff)',
+          user: 'Madam Lim (Accounts Executive)',
           action: 'Reminder Sent (Reviewed)',
-          details: `Staff reviewed and dispatched payment reminder to ${recipientEmail}.`,
+          details: `Reviewed and dispatched payment reminder to ${recipientEmail}.`,
           type: 'reminder_sent' as const,
         };
 
@@ -581,10 +1044,11 @@ export default function App() {
         }}
         onOpenExtractorModal={() => setIsExtractorOpen(true)}
         onOpenAIAssistant={() => setIsAIAssistantOpen(true)}
-        onLoadSampleData={() => {
-          setInvoices(sampleInvoices);
-          showToast('Loaded sample demo invoices for testing.');
-        }}
+        onOpenGoogleWorkspace={() => setIsGoogleWorkspaceOpen(true)}
+        onSyncInvoices={handleSyncFromGoogleSheets}
+        isSyncing={isSyncingSheets}
+        onRetrieveMatchResults={handleRetrieveMatchResults}
+        isRetrievingMatchResults={isRetrievingMatchResults}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
       />
@@ -600,10 +1064,13 @@ export default function App() {
           }}
           onOpenExtractorModal={() => setIsExtractorOpen(true)}
           onOpenAIAssistant={() => setIsAIAssistantOpen(true)}
+          onOpenGoogleWorkspace={() => setIsGoogleWorkspaceOpen(true)}
+          onSyncFromGoogleSheets={handleSyncFromGoogleSheets}
           unpaidCount={metrics.totalUnpaidCount}
           overdueCount={metrics.overdueCount}
           needsReviewCount={metrics.needsReviewCount}
           activeFilterTitle={activeView === 'dashboard' ? 'Home Dashboard Overview' : activeFilterTitle}
+          isSyncingSheets={isSyncingSheets}
         />
 
         {/* Dashboard Main Content */}
@@ -1091,10 +1558,8 @@ export default function App() {
                   setIsAddEditOpen(true);
                 }}
                 onOpenExtractorModal={() => setIsExtractorOpen(true)}
-                onLoadSampleData={() => {
-                  setInvoices(sampleInvoices);
-                  showToast('Loaded sample demo invoices for testing.');
-                }}
+                onSyncInvoices={handleSyncFromGoogleSheets}
+                isSyncing={isSyncingSheets}
               />
             </div>
           )}
@@ -1175,7 +1640,71 @@ export default function App() {
           setInvoices((prev) => [...newInvoices, ...prev]);
           showToast(`Imported ${newInvoices.length} extracted invoices to ledger.`);
         }}
-        currentUser="Giselle Chem (Staff)"
+        currentUser="Madam Lim (Accounts Executive)"
+      />
+
+      <GoogleWorkspaceModal
+        isOpen={isGoogleWorkspaceOpen}
+        onClose={() => setIsGoogleWorkspaceOpen(false)}
+        invoices={invoices}
+        onSyncFromGoogleSheets={handleSyncFromGoogleSheets}
+        isSyncingSheets={isSyncingSheets}
+        onImportInvoices={(newInvoices) => {
+          setInvoices((prev) => {
+            // Convert Partial<Invoice> into full Invoice objects with defaults
+            const formatted: Invoice[] = newInvoices.map((inv, idx) => {
+              const appDate = inv.approvalDate || new Date().toISOString().split('T')[0];
+              const pTerms = inv.paymentTerms || 'Net 30';
+              const calcDue = inv.calculatedDueDate || calculateDueDate(appDate, pTerms, inv.fixedDueDate);
+
+              return {
+                id: inv.id || `inv-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 9)}`,
+                supplierName: inv.supplierName || 'Imported Vendor',
+                invoiceNumber: inv.invoiceNumber || 'INV-' + Math.floor(10000 + Math.random() * 90000),
+                amount: inv.amount || 0,
+                approvalDate: appDate,
+                paymentTerms: pTerms,
+                fixedDueDate: inv.fixedDueDate,
+                calculatedDueDate: calcDue,
+                status: inv.status || 'Unpaid',
+                poNumber: inv.poNumber,
+                poAmount: inv.poAmount,
+                grnNumber: inv.grnNumber,
+                grnVerified: inv.grnVerified ?? true,
+                bankDetails: inv.bankDetails,
+                contactEmail: inv.contactEmail,
+                reminders: inv.reminders || [],
+                history: inv.history || [
+                  {
+                    id: String(Date.now()),
+                    timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
+                    user: 'Madam Lim (Accounts Executive)',
+                    action: 'Imported from Google Workspace',
+                    details: 'Imported row via Google Sheets sync',
+                    type: 'status_change',
+                  },
+                ],
+                notes: inv.notes || 'Imported from Google Sheets',
+                needsReview: inv.needsReview ?? false,
+              };
+            });
+            return [...formatted, ...prev];
+          });
+        }}
+        onShowToast={showToast}
+        onOpenExtractorWithDriveFile={(driveFile) => {
+          setIsGoogleWorkspaceOpen(false);
+          setIsExtractorOpen(true);
+          showToast(`Opened Google Drive file: ${driveFile.name}`);
+        }}
+      />
+
+      <SyncSummaryModal
+        isOpen={isSyncSummaryOpen}
+        onClose={() => setIsSyncSummaryOpen(false)}
+        summary={syncSummaryData}
+        onReSync={handleSyncFromGoogleSheets}
+        isSyncing={isSyncingSheets}
       />
 
     </div>

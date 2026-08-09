@@ -167,6 +167,9 @@ export function auditInvoiceData(invoice: Partial<Invoice>): { needsReview: bool
   if (!invoice.bankDetails || invoice.bankDetails.trim() === '') {
     reasons.push('Missing Supplier Bank Details');
   }
+  if (invoice.status === 'Ready for Payment' && (!invoice.grnNumber || invoice.grnNumber.trim() === '')) {
+    reasons.push('Missing GRN Number (Required for 3-Way Match)');
+  }
 
   const calculatedDueDate = calculateDueDate(
     invoice.invoiceDate,
@@ -228,36 +231,40 @@ export function calculateThreeWayMatch(invoice: Partial<Invoice>): {
   };
 } {
   const reasons: string[] = [];
-  const poMatched = Boolean(invoice.poNumber && invoice.poNumber.trim().length > 0);
-  const grnMatched = Boolean(invoice.grnNumber && invoice.grnNumber.trim().length > 0 && invoice.grnVerified !== false);
-  const amount = invoice.amount || 0;
-  const poAmount = invoice.poAmount !== undefined && invoice.poAmount !== null ? invoice.poAmount : amount;
-  const amountMatched = amount > 0 && poAmount === amount;
+
+  const poMatched = !!(invoice.poNumber && invoice.poNumber.trim() !== '');
+  const grnMatched = !!(invoice.grnNumber && invoice.grnNumber.trim() !== '' && invoice.grnVerified !== false);
+  
+  const amountMatched = typeof invoice.amount === 'number' && typeof invoice.poAmount === 'number'
+    ? Math.abs(invoice.amount - invoice.poAmount) < 0.01
+    : true; // if no poAmount recorded, assume true
 
   if (!poMatched) {
     reasons.push('Missing Purchase Order (PO)');
   }
-  if (invoice.poAmount !== undefined && invoice.poAmount !== amount) {
-    reasons.push(`PO Amount (SGD ${invoice.poAmount}) does not match Invoice Amount (SGD ${amount})`);
+  if (!grnMatched) {
+    if (!invoice.grnNumber || invoice.grnNumber.trim() === '') {
+      reasons.push('Missing Goods Receipt Note (GRN)');
+    } else if (invoice.grnVerified === false) {
+      reasons.push('GRN Goods/Services Unverified');
+    }
   }
-  if (!invoice.grnNumber || invoice.grnNumber.trim() === '') {
-    reasons.push('Missing Goods Receipt Note (GRN)');
-  } else if (invoice.grnVerified === false) {
-    reasons.push('Goods Receipt / Service Delivery pending verification');
+  if (!amountMatched) {
+    reasons.push(`Amount mismatch: Invoice (${invoice.amount}) vs PO (${invoice.poAmount})`);
   }
 
   let status: ThreeWayMatchStatus = 'Matched';
-  if (!poMatched) {
+  if (!poMatched && !grnMatched) {
+    status = 'Needs Review';
+  } else if (!poMatched) {
     status = 'Pending PO';
   } else if (!grnMatched) {
     status = 'Pending GRN';
   } else if (!amountMatched) {
     status = 'Discrepancy';
-  } else if (reasons.length > 0) {
-    status = 'Needs Review';
   }
 
-  const readyForPayment = status === 'Matched' && amount > 0 && !invoice.needsReview;
+  const readyForPayment = poMatched && grnMatched && amountMatched;
 
   return {
     status,

@@ -44,6 +44,8 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
     switch (status) {
       case 'Paid':
         return <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold border border-emerald-300">PAID</span>;
+      case 'Ready for Payment':
+        return <span className="px-2.5 py-1 rounded-full bg-cyan-100 text-cyan-800 text-xs font-bold border border-cyan-300">READY FOR PAYMENT</span>;
       case 'On Hold':
         return <span className="px-2.5 py-1 rounded-full bg-purple-100 text-purple-800 text-xs font-bold border border-purple-300">ON HOLD</span>;
       case 'Disputed':

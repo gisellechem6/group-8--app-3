@@ -29,14 +29,14 @@ const baseInvoicesData: Omit<Invoice, 'needsReview' | 'reviewReasons' | 'calcula
         body: 'Dear Accounts Team,\n\nThis is a friendly advisory regarding Invoice INV-2026-801 for SGD 4,250.00 due on 31 Jul 2026. Payment is currently scheduled for processing.\n\nThank you,\nFinance Department',
         status: 'Sent',
         sentAt: '23 Jul 2026, 09:20 AM',
-        sentBy: 'Giselle Chem (Finance Officer)'
+        sentBy: 'Madam Lim (Accounts Executive)'
       }
     ],
     history: [
       {
         id: 'hist-1',
         timestamp: '03 Jul 2026, 11:30 AM',
-        user: 'Giselle Chem',
+        user: 'Madam Lim (Accounts Executive)',
         action: 'Invoice Created',
         details: 'Recorded approved invoice INV-2026-801 with Net 30 payment terms.',
         type: 'creation'
@@ -65,7 +65,7 @@ const baseInvoicesData: Omit<Invoice, 'needsReview' | 'reviewReasons' | 'calcula
       {
         id: 'hist-3',
         timestamp: '28 Jun 2026, 02:15 PM',
-        user: 'Giselle Chem',
+        user: 'Madam Lim (Accounts Executive)',
         action: 'Invoice Created',
         details: 'Approved ERP software invoice registered.',
         type: 'creation'
@@ -94,7 +94,7 @@ const baseInvoicesData: Omit<Invoice, 'needsReview' | 'reviewReasons' | 'calcula
       {
         id: 'hist-5',
         timestamp: '30 Jul 2026, 08:00 AM',
-        user: 'Giselle Chem',
+        user: 'Madam Lim (Accounts Executive)',
         action: 'Invoice Created',
         details: 'Due on receipt invoice registered for immediate clearance.',
         type: 'creation'

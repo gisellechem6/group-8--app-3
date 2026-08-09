@@ -19,7 +19,9 @@ import {
   LayoutDashboard,
   Upload,
   PieChart,
-  FileX
+  FileX,
+  FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 import { InvoiceStatus } from '../types';
 
@@ -54,7 +56,11 @@ interface SidebarProps {
   onOpenAddModal: () => void;
   onOpenExtractorModal: () => void;
   onOpenAIAssistant: () => void;
-  onLoadSampleData: () => void;
+  onOpenGoogleWorkspace: () => void;
+  onSyncInvoices?: () => void;
+  isSyncing?: boolean;
+  onRetrieveMatchResults?: () => void;
+  isRetrievingMatchResults?: boolean;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
 }
@@ -70,7 +76,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAddModal,
   onOpenExtractorModal,
   onOpenAIAssistant,
-  onLoadSampleData,
+  onOpenGoogleWorkspace,
+  onSyncInvoices,
+  isSyncing = false,
+  onRetrieveMatchResults,
+  isRetrievingMatchResults = false,
   isCollapsed,
   onToggleCollapse,
 }) => {
@@ -128,7 +138,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <h1 className="text-sm font-bold tracking-wide text-white leading-tight">
                 Payment<span className="text-blue-400">Monitor</span>
               </h1>
-              <p className="text-[10px] text-slate-400">Finance & Invoice Hub</p>
+              <p className="text-[10px] text-slate-400 font-medium">Boon Huat Hardware & Supplies</p>
             </div>
           </div>
         )}
@@ -475,8 +485,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* Section 3: AI Assistant Launcher */}
-        <div className="pt-2 border-t border-slate-800">
+        {/* Section 3: Google Workspace & AI Assistant Launchers */}
+        <div className="pt-2 border-t border-slate-800 space-y-2">
+          <button
+            onClick={onOpenGoogleWorkspace}
+            className={`w-full p-2.5 bg-emerald-950/80 hover:bg-emerald-900/90 border border-emerald-800/80 text-emerald-300 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all cursor-pointer ${
+              isCollapsed ? 'justify-center' : 'justify-start'
+            }`}
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400 shrink-0" />
+            {!isCollapsed && (
+              <div className="text-left">
+                <span className="block text-emerald-200 text-xs font-bold">Google Sheets & Drive</span>
+                <span className="block text-[10px] text-emerald-400/80 font-normal">Sync live ledger & Drive files</span>
+              </div>
+            )}
+          </button>
+
+          {/* Button directly under Google Sheets & Drive to retrieve Match_Results */}
+          {onRetrieveMatchResults && (
+            <button
+              onClick={onRetrieveMatchResults}
+              disabled={isRetrievingMatchResults}
+              className={`w-full p-2.5 bg-cyan-950/80 hover:bg-cyan-900/90 border border-cyan-800/80 text-cyan-300 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all cursor-pointer ${
+                isCollapsed ? 'justify-center' : 'justify-start'
+              }`}
+              title="Retrieve Ready for Payment Invoices from Match_Results Google Sheet"
+              id="btn-sidebar-retrieve-match-results"
+            >
+              <CheckCircle2 className={`w-4 h-4 text-cyan-400 shrink-0 ${isRetrievingMatchResults ? 'animate-spin' : ''}`} />
+              {!isCollapsed && (
+                <div className="text-left min-w-0">
+                  <span className="block text-cyan-200 text-xs font-bold truncate">
+                    {isRetrievingMatchResults ? 'Retrieving Invoices...' : 'Retrieve Match Results'}
+                  </span>
+                  <span className="block text-[10px] text-cyan-400/80 font-normal truncate">Fetch ready for payment</span>
+                </div>
+              )}
+            </button>
+          )}
+
           <button
             onClick={onOpenAIAssistant}
             className={`w-full p-2.5 bg-slate-800/90 hover:bg-slate-800 border border-slate-700/80 text-amber-300 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all ${
@@ -494,18 +542,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Footer / Reset Data */}
+      {/* Footer / Sync Invoices */}
       <div className="p-3 border-t border-slate-800 shrink-0">
-        <button
-          onClick={onLoadSampleData}
-          className={`w-full py-1.5 px-2 text-[11px] text-slate-400 hover:text-slate-200 flex items-center gap-1.5 hover:bg-slate-800/50 rounded-lg transition-colors ${
-            isCollapsed ? 'justify-center' : 'justify-start'
-          }`}
-          title="Reload Demo Datasets"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          {!isCollapsed && <span>Load Demo Invoices</span>}
-        </button>
+        {onSyncInvoices && (
+          <button
+            onClick={onSyncInvoices}
+            disabled={isSyncing}
+            className={`w-full py-2 px-2.5 text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-950/40 hover:bg-emerald-950/80 border border-emerald-500/30 rounded-xl font-bold flex items-center gap-2 transition-all cursor-pointer ${
+              isCollapsed ? 'justify-center' : 'justify-start'
+            }`}
+            title="Sync Latest Approved_For_Payment Invoices"
+            id="btn-sidebar-sync-sheets"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            {!isCollapsed && <span>{isSyncing ? 'Syncing...' : 'Sync Invoices'}</span>}
+          </button>
+        )}
       </div>
     </aside>
   );

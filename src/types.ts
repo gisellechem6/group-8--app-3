@@ -1,4 +1,4 @@
-export type InvoiceStatus = 'Unpaid' | 'Paid' | 'On Hold' | 'Disputed' | 'Cancelled';
+export type InvoiceStatus = 'Unpaid' | 'Ready for Payment' | 'Paid' | 'On Hold' | 'Disputed' | 'Cancelled';
 
 export type PaymentTerms = 
   | 'Due on receipt' 

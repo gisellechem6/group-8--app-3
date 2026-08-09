@@ -29,7 +29,8 @@ interface InvoiceListProps {
   onQuickHold: (invoiceId: string) => void;
   onOpenAddModal: () => void;
   onOpenExtractorModal: () => void;
-  onLoadSampleData?: () => void;
+  onSyncInvoices?: () => void;
+  isSyncing?: boolean;
 }
 
 export const InvoiceList: React.FC<InvoiceListProps> = ({
@@ -43,7 +44,8 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
   onQuickHold,
   onOpenAddModal,
   onOpenExtractorModal,
-  onLoadSampleData,
+  onSyncInvoices,
+  isSyncing = false,
 }) => {
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
@@ -61,6 +63,15 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
   };
 
   const renderStatusBadge = (status: InvoiceStatus, needsReview: boolean, calculatedDueDate?: string) => {
+    if (status === 'Ready for Payment') {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-800 border border-cyan-300 text-[10px] font-extrabold uppercase tracking-wider">
+          <CheckCircle2 className="w-3 h-3 mr-1 text-cyan-600" />
+          <span>READY FOR PAYMENT</span>
+        </span>
+      );
+    }
+
     if (needsReview) {
       return (
         <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold uppercase tracking-wider">
@@ -287,40 +298,37 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
             <tbody className="text-sm divide-y divide-slate-100">
               {invoices.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12 px-4">
+                  <td colSpan={8} className="text-center py-16 px-4">
                     <div className="max-w-md mx-auto space-y-3">
-                      <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto">
-                        <FileSpreadsheet className="w-6 h-6" />
+                      <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto border border-slate-200">
+                        <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
                       </div>
                       <div>
-                        <h3 className="font-semibold text-slate-800 text-sm">No Supplier Invoices Found</h3>
+                        <h3 className="font-bold text-slate-800 text-base">
+                          No approved invoices available.
+                        </h3>
                         <p className="text-xs text-slate-500 mt-1">
-                          This is a clean invoice monitor workspace. Add your first invoice manually, extract from an Excel spreadsheet, or load demo sample data.
+                          Click "Sync Invoices" to load the latest records from worksheet tab <strong className="text-slate-700 font-mono">Approved_For_Payment</strong>.
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
-                        <button
-                          onClick={onOpenExtractorModal}
-                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-lg flex items-center space-x-1"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          <span>Extract Excel / Docs</span>
-                        </button>
-                        <button
-                          onClick={onOpenAddModal}
-                          className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium rounded-lg flex items-center space-x-1"
-                        >
-                          <Plus className="w-3 h-3" />
-                          <span>Add Invoice</span>
-                        </button>
-                        {onLoadSampleData && (
+                        {onSyncInvoices && (
                           <button
-                            onClick={onLoadSampleData}
-                            className="px-3 py-1.5 border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg"
+                            onClick={onSyncInvoices}
+                            disabled={isSyncing}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg flex items-center space-x-1.5 shadow-sm transition-all cursor-pointer disabled:opacity-50"
                           >
-                            Load Sample Demo Data
+                            <FileSpreadsheet className="w-4 h-4" />
+                            <span>{isSyncing ? 'Syncing...' : 'Sync Invoices'}</span>
                           </button>
                         )}
+                        <button
+                          onClick={onOpenAddModal}
+                          className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg flex items-center space-x-1 transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Add Manual Invoice</span>
+                        </button>
                       </div>
                     </div>
                   </td>
@@ -440,7 +448,7 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
         <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 overflow-y-auto">
           {invoices.length === 0 ? (
             <div className="col-span-2 text-center py-12 text-slate-500">
-              <p className="font-semibold text-slate-700">No supplier invoices found.</p>
+              <p className="font-semibold text-slate-700">No approved invoices available.</p>
             </div>
           ) : (
             invoices.map((inv) => {

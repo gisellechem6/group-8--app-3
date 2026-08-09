@@ -3,6 +3,7 @@ import { X, FileText, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Spar
 import * as XLSX from 'xlsx';
 import { Invoice, PaymentTerms, InvoiceStatus } from '../types';
 import { calculateDueDate, auditInvoiceData, calculateThreeWayMatch, getSingaporeNowFormatted } from '../utils/dateUtils';
+import { appendInvoiceToGoogleSheet } from '../utils/googleWorkspace';
 
 interface DocumentExtractorModalProps {
   isOpen: boolean;
@@ -144,6 +145,9 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
+        if (res.status === 429 || errJson.isQuotaExceeded) {
+          throw new Error(errJson.error || 'Gemini API free-tier quota reached (limit: 20 requests/day). Please wait ~45 seconds before trying again, or enter invoice details manually.');
+        }
         throw new Error(errJson.error || 'Failed to extract invoice data from documents.');
       }
 
@@ -208,13 +212,27 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
     });
   };
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     const selectedItems = extractedList.filter((item) => item.selected);
     if (selectedItems.length === 0) return;
 
-    const now = getSingaporeNowFormatted();
+    setIsExtracting(true);
+    setErrorMessage(null);
 
-    const finalizedInvoices: Invoice[] = selectedItems.map((item, idx) => {
+    const now = getSingaporeNowFormatted();
+    const finalizedInvoices: Invoice[] = [];
+    const feedbackMessages: string[] = [];
+
+    for (let idx = 0; idx < selectedItems.length; idx++) {
+      const item = selectedItems[idx];
+      const sheetResult = await appendInvoiceToGoogleSheet(item);
+
+      if (!sheetResult.success) {
+        feedbackMessages.push(`Invoice ${item.invoiceNumber || 'Record'}: ${sheetResult.userMessage}`);
+      } else {
+        feedbackMessages.push(`Invoice ${item.invoiceNumber}: Invoice successfully added to Google Sheets.`);
+      }
+
       const calcDue = calculateDueDate(item.invoiceDate, item.paymentTerms || 'Net 30', item.fixedDueDate);
       const audit = auditInvoiceData({
         supplierName: item.supplierName,
@@ -230,8 +248,8 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
 
       const initialStatus: InvoiceStatus = match.status === 'Matched' ? 'Unpaid' : 'On Hold';
 
-      return {
-        id: `inv-${Date.now()}-${idx}`,
+      finalizedInvoices.push({
+        id: `inv-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 9)}`,
         supplierName: item.supplierName || 'Needs Review',
         invoiceNumber: item.invoiceNumber || 'Needs Review',
         invoiceDate: item.invoiceDate || '',
@@ -260,14 +278,23 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
             timestamp: now,
             user: currentUser,
             action: 'Document Extracted',
-            details: `Invoice imported via AI Multi-Document Extractor. Three-Way Match: ${match.status}.${match.status !== 'Matched' ? ' Automatically placed On Hold due to 3-way match exception.' : ''}`,
+            details: `Invoice imported & sent to Google Sheets Approved_For_Payment. Status: ${sheetResult.userMessage}`,
             type: match.status !== 'Matched' ? 'hold' : 'creation'
           }
         ]
-      };
-    });
+      });
+    }
 
-    onImportInvoices(finalizedInvoices);
+    setIsExtracting(false);
+
+    if (finalizedInvoices.length > 0) {
+      onImportInvoices(finalizedInvoices);
+    }
+
+    if (feedbackMessages.length > 0) {
+      alert(`Google Sheets Import Summary:\n\n` + feedbackMessages.join('\n'));
+    }
+
     onClose();
   };
 
@@ -418,9 +445,40 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
 
               {/* Error Alert */}
               {errorMessage && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-start space-x-2 text-xs text-red-700">
-                  <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                  <span>{errorMessage}</span>
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex flex-col space-y-2 text-xs text-red-700">
+                  <div className="flex items-start space-x-2">
+                    <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <span>{errorMessage}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMessage(null);
+                      setExtractedList([
+                        {
+                          tempId: `ext-${Date.now()}-0`,
+                          selected: true,
+                          supplierName: '',
+                          invoiceNumber: '',
+                          invoiceDate: new Date().toISOString().split('T')[0],
+                          approvalDate: new Date().toISOString().split('T')[0],
+                          amount: 0,
+                          currency: 'SGD',
+                          paymentTerms: 'Net 30',
+                          bankDetails: '',
+                          poNumber: '',
+                          poAmount: 0,
+                          grnNumber: '',
+                          grnVerified: true,
+                          contactEmail: '',
+                          notes: 'Manual entry fallback',
+                        },
+                      ]);
+                    }}
+                    className="self-start px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold transition-colors flex items-center space-x-1"
+                  >
+                    <span>+ Enter Invoice Details Manually</span>
+                  </button>
                 </div>
               )}
 
@@ -454,13 +512,44 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
                   <h4 className="font-semibold text-slate-900 text-sm">Review & Verify Extracted Invoices ({extractedList.length} Found)</h4>
                   <p className="text-xs text-slate-500">Verify extracted details and Three-Way Match status before importing to ledger.</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setExtractedList([])}
-                  className="text-xs text-indigo-600 hover:underline font-medium"
-                >
-                  Extract Another Batch
-                </button>
+                <div className="flex items-center space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExtractedList((prev) => [
+                        ...prev,
+                        {
+                          tempId: `ext-${Date.now()}-${prev.length}`,
+                          selected: true,
+                          supplierName: '',
+                          invoiceNumber: '',
+                          invoiceDate: new Date().toISOString().split('T')[0],
+                          approvalDate: new Date().toISOString().split('T')[0],
+                          amount: 0,
+                          currency: 'SGD',
+                          paymentTerms: 'Net 30',
+                          bankDetails: '',
+                          poNumber: '',
+                          poAmount: 0,
+                          grnNumber: '',
+                          grnVerified: true,
+                          contactEmail: '',
+                          notes: 'Manual row',
+                        },
+                      ]);
+                    }}
+                    className="text-xs text-emerald-700 hover:text-emerald-800 font-semibold hover:underline"
+                  >
+                    + Add Row
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExtractedList([])}
+                    className="text-xs text-indigo-600 hover:underline font-medium"
+                  >
+                    Extract Another Batch
+                  </button>
+                </div>
               </div>
 
               <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
