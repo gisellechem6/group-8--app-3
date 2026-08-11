@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Invoice, FilterOptions, InvoiceStatus } from '../types';
-import { formatSingaporeDate, getDaysUntilDue, getEligibleReminderStage, calculateThreeWayMatch } from '../utils/dateUtils';
+import { formatSingaporeDate, getDaysUntilDue, getEligibleReminderStage } from '../utils/dateUtils';
 import {
   Search,
   Clock,
@@ -290,7 +290,6 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
                 <th className="px-4 py-3">Amount</th>
                 <th className="px-4 py-3">Due Date</th>
                 <th className="px-4 py-3">Terms</th>
-                <th className="px-4 py-3">3-Way Match</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -298,7 +297,7 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
             <tbody className="text-sm divide-y divide-slate-100">
               {invoices.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-16 px-4">
+                  <td colSpan={7} className="text-center py-16 px-4">
                     <div className="max-w-md mx-auto space-y-3">
                       <div className="w-12 h-12 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto border border-slate-200">
                         <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
@@ -308,7 +307,7 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
                           No approved invoices available.
                         </h3>
                         <p className="text-xs text-slate-500 mt-1">
-                          Click "Sync Invoices" to load the latest records from worksheet tab <strong className="text-slate-700 font-mono">Approved_For_Payment</strong>.
+                          Click "Sync Invoices" to load the latest records from worksheet tab <strong className="text-slate-700 font-mono">Matched_Results</strong>.
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
@@ -338,7 +337,6 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
                   const eligibleStage = getEligibleReminderStage(inv);
                   const isOverdue = inv.status === 'Unpaid' && inv.calculatedDueDate && (getDaysUntilDue(inv.calculatedDueDate) ?? 0) < 0;
                   const isDueToday = inv.status === 'Unpaid' && inv.calculatedDueDate && (getDaysUntilDue(inv.calculatedDueDate) === 0);
-                  const match = calculateThreeWayMatch(inv);
 
                   return (
                     <tr
@@ -367,21 +365,6 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
 
                       <td className="px-4 py-3 text-xs text-slate-600">
                         {inv.paymentTerms}
-                      </td>
-
-                      {/* 3-Way Match Badge Column */}
-                      <td className="px-4 py-3">
-                        {match.readyForPayment ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600 mr-1" />
-                            <span>Matched</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
-                            <AlertCircle className="w-3 h-3 text-amber-600 mr-1" />
-                            <span>{match.status}</span>
-                          </span>
-                        )}
                       </td>
 
                       <td className="px-4 py-3">
@@ -452,7 +435,6 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
             </div>
           ) : (
             invoices.map((inv) => {
-              const match = calculateThreeWayMatch(inv);
               return (
                 <div
                   key={inv.id}
@@ -465,11 +447,6 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
                     </div>
                     <div className="flex flex-col items-end space-y-1">
                       {renderStatusBadge(inv.status, inv.needsReview, inv.calculatedDueDate)}
-                      {match.readyForPayment && (
-                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
-                          3-Way Matched
-                        </span>
-                      )}
                     </div>
                   </div>
 
@@ -485,12 +462,6 @@ export const InvoiceList: React.FC<InvoiceListProps> = ({
                     <div className="flex justify-between">
                       <span className="text-slate-400">Terms:</span>
                       <span>{inv.paymentTerms}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">3-Way Match:</span>
-                      <span className={match.readyForPayment ? 'text-emerald-700 font-semibold' : 'text-amber-700'}>
-                        {match.status}
-                      </span>
                     </div>
                   </div>
 

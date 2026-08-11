@@ -1,4 +1,4 @@
-import { Invoice, PaymentTerms, ReminderStage, ThreeWayMatchStatus } from '../types';
+import { Invoice, PaymentTerms, ReminderStage } from '../types';
 
 /**
  * Returns current date string formatted as YYYY-MM-DD in Singapore time (SGT / UTC+8)
@@ -167,9 +167,6 @@ export function auditInvoiceData(invoice: Partial<Invoice>): { needsReview: bool
   if (!invoice.bankDetails || invoice.bankDetails.trim() === '') {
     reasons.push('Missing Supplier Bank Details');
   }
-  if (invoice.status === 'Ready for Payment' && (!invoice.grnNumber || invoice.grnNumber.trim() === '')) {
-    reasons.push('Missing GRN Number (Required for 3-Way Match)');
-  }
 
   const calculatedDueDate = calculateDueDate(
     invoice.invoiceDate,
@@ -217,63 +214,4 @@ export function getStageLabel(stage: ReminderStage): string {
   }
 }
 
-/**
-  Evaluates Three-Way Matching (Invoice + Purchase Order + Goods Receipt Note)
- */
-export function calculateThreeWayMatch(invoice: Partial<Invoice>): {
-  status: ThreeWayMatchStatus;
-  readyForPayment: boolean;
-  matchDetails: {
-    poMatched: boolean;
-    grnMatched: boolean;
-    amountMatched: boolean;
-    reasons: string[];
-  };
-} {
-  const reasons: string[] = [];
 
-  const poMatched = !!(invoice.poNumber && invoice.poNumber.trim() !== '');
-  const grnMatched = !!(invoice.grnNumber && invoice.grnNumber.trim() !== '' && invoice.grnVerified !== false);
-  
-  const amountMatched = typeof invoice.amount === 'number' && typeof invoice.poAmount === 'number'
-    ? Math.abs(invoice.amount - invoice.poAmount) < 0.01
-    : true; // if no poAmount recorded, assume true
-
-  if (!poMatched) {
-    reasons.push('Missing Purchase Order (PO)');
-  }
-  if (!grnMatched) {
-    if (!invoice.grnNumber || invoice.grnNumber.trim() === '') {
-      reasons.push('Missing Goods Receipt Note (GRN)');
-    } else if (invoice.grnVerified === false) {
-      reasons.push('GRN Goods/Services Unverified');
-    }
-  }
-  if (!amountMatched) {
-    reasons.push(`Amount mismatch: Invoice (${invoice.amount}) vs PO (${invoice.poAmount})`);
-  }
-
-  let status: ThreeWayMatchStatus = 'Matched';
-  if (!poMatched && !grnMatched) {
-    status = 'Needs Review';
-  } else if (!poMatched) {
-    status = 'Pending PO';
-  } else if (!grnMatched) {
-    status = 'Pending GRN';
-  } else if (!amountMatched) {
-    status = 'Discrepancy';
-  }
-
-  const readyForPayment = poMatched && grnMatched && amountMatched;
-
-  return {
-    status,
-    readyForPayment,
-    matchDetails: {
-      poMatched,
-      grnMatched,
-      amountMatched,
-      reasons,
-    },
-  };
-}

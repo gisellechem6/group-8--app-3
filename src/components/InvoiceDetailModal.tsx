@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Invoice, InvoiceStatus } from '../types';
-import { formatSingaporeDate, getDaysUntilDue, getEligibleReminderStage, getStageLabel, calculateThreeWayMatch } from '../utils/dateUtils';
+import { formatSingaporeDate, getDaysUntilDue, getEligibleReminderStage, getStageLabel } from '../utils/dateUtils';
 import {
   X,
   CheckCircle2,
@@ -213,68 +213,6 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
                   <p className="text-sm font-bold text-slate-900">{formatSingaporeDate(invoice.calculatedDueDate)}</p>
                 </div>
               </div>
-
-              {/* Three-Way Matching Verification Card */}
-              {(() => {
-                const match = calculateThreeWayMatch(invoice);
-                return (
-                  <div className={`p-4 rounded-xl border space-y-3 ${
-                    match.readyForPayment
-                      ? 'bg-emerald-50/80 border-emerald-300 text-emerald-900'
-                      : 'bg-amber-50/80 border-amber-300 text-amber-900'
-                  }`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2 font-bold text-sm">
-                        <FileText className={`w-4 h-4 ${match.readyForPayment ? 'text-emerald-600' : 'text-amber-600'}`} />
-                        <span>Three-Way Matching Status</span>
-                      </div>
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                        match.readyForPayment
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-amber-600 text-white'
-                      }`}>
-                        {match.readyForPayment ? 'Ready for Payment (Matched)' : match.status}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-white/80 p-3 rounded-lg border border-slate-200">
-                      <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Purchase Order</span>
-                        <span className="font-mono font-semibold text-slate-800">
-                          {invoice.poNumber || <span className="text-amber-600 italic">No PO Recorded</span>}
-                        </span>
-                        {invoice.poAmount !== undefined && (
-                          <span className="block text-[11px] text-slate-500">PO Amt: {formatSGD(invoice.poAmount)}</span>
-                        )}
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Goods Receipt (GRN)</span>
-                        <span className="font-mono font-semibold text-slate-800">
-                          {invoice.grnNumber || <span className="text-amber-600 italic">No GRN Recorded</span>}
-                        </span>
-                        <span className="block text-[11px] text-slate-500">
-                          Status: {invoice.grnVerified ? 'Goods Verified' : 'Unverified'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Amount Comparison</span>
-                        <span className="font-semibold text-slate-800">
-                          Inv: {formatSGD(invoice.amount)}
-                        </span>
-                        {invoice.poAmount !== undefined && (
-                          <span className={`block text-[11px] font-bold ${
-                            invoice.amount === invoice.poAmount ? 'text-emerald-600' : 'text-rose-600'
-                          }`}>
-                            {invoice.amount === invoice.poAmount ? '✓ Exact Match' : `Diff: ${formatSGD(invoice.amount - invoice.poAmount)}`}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
 
               {/* Verified Bank Details */}
               <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-2">

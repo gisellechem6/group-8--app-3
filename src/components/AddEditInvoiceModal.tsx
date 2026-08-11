@@ -307,14 +307,14 @@ export const AddEditInvoiceModal: React.FC<AddEditInvoiceModalProps> = ({
             )}
           </div>
 
-          {/* Three-Way Matching Section (PO & GRN) */}
+          {/* Reference Details Section (Optional) */}
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                Three-Way Matching Controls
+                Reference Numbers (Optional)
               </span>
               <span className="text-[11px] text-slate-500">
-                Matches PO + Goods Receipt + Supplier Invoice
+                Provide PO and Goods Receipt references for tracking
               </span>
             </div>
 

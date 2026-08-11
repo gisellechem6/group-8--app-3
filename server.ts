@@ -1086,7 +1086,7 @@ app.post('/api/sheets/fetch', async (req, res) => {
       });
     }
 
-    // Find worksheet named targetSheetName, or Match_Results if requested, or Approved_For_Payment, or by GID, or default to first sheet
+    // Find worksheet named targetSheetName, or Matched_Results if requested, or Payment_Complete, or by GID, or default to first sheet
     const requestedSheetName = (req.body.targetSheetName || req.body.sheetName || '').toString().trim().toLowerCase();
     let targetSheet: any = null;
 
@@ -1112,8 +1112,8 @@ app.post('/api/sheets/fetch', async (req, res) => {
       targetSheet = sheetsList.find(
         (s) =>
           s.properties?.title &&
-          (s.properties.title.trim().toLowerCase() === 'approved_for_payment' ||
-            s.properties.title.trim().toLowerCase().replace(/_/g, ' ') === 'approved for payment')
+          (s.properties.title.trim().toLowerCase() === 'matched_results' ||
+            s.properties.title.trim().toLowerCase().replace(/_/g, ' ') === 'matched results')
       );
     }
 
@@ -1357,7 +1357,7 @@ app.post('/api/sheets/fetch', async (req, res) => {
         paymentDate: payDateVal || undefined,
         approvalStatus: 'Approved',
         grnVerified: true,
-        notes: notesCol !== -1 && row[notesCol] ? row[notesCol].toString().trim() : 'Synced from Approved_For_Payment Google Sheet',
+        notes: notesCol !== -1 && row[notesCol] ? row[notesCol].toString().trim() : 'Synced from Matched_Results Google Sheet',
         needsReview: isMissingInfo,
       });
     }
@@ -1471,7 +1471,7 @@ function computeLastReminderDate(dueDateStr: string | undefined | null): string 
   return `${rYr}-${rMo}-${rDy}`;
 }
 
-// API Route: Append new row to Google Sheets worksheet 'Approved_For_Payment'
+// API Route: Append new row to Google Sheets worksheet 'Payment_Complete'
 app.post('/api/sheets/append-invoice', async (req, res) => {
   try {
     const { spreadsheetId = '13xu1LcP2MBADKqQ1tc02NIk7ZsHp9nbFA8BmOS-SnnA', accessToken, invoice } = req.body;
@@ -1553,31 +1553,43 @@ app.post('/api/sheets/append-invoice', async (req, res) => {
       paymentDate = ''; // Leave blank if unpaid
     }
 
-    // Step 7: Check Column A in worksheet Approved_For_Payment for existing duplicates
-    const meta = await getGoogleSheetMetadata(spreadsheetId, accessToken);
-    if (!meta.ok) {
+    // Ensure we ONLY add rows to 'Payment_Complete' worksheet, and ONLY if status is 'Paid'
+    if (paymentStatus !== 'Paid') {
       return res.status(200).json({
-        success: false,
-        code: 'SHEETS_API_ERROR',
-        userMessage: meta.errorText,
-        error: meta.errorText,
+        success: true,
+        code: 'SUCCESS',
+        userMessage: 'Invoice successfully saved locally (skipped Google Sheets append to avoid writing to non-Paid worksheets per guidelines).',
+        message: 'Invoice successfully saved locally.',
+        targetSheetName: 'N/A',
+        invoice: {
+          supplierName,
+          invoiceNumber,
+          invoiceDate,
+          approvalDate,
+          amount: numAmount,
+          currency: 'SGD',
+          paymentTerms,
+          calculatedDueDate: dueDate || null,
+          status: paymentStatus,
+          poNumber,
+          needsReview,
+        },
       });
     }
 
-    const sheetsList = meta.sheets || [];
-    let targetSheet = sheetsList.find(
-      (s: any) =>
-        s.properties?.title &&
-        (s.properties.title.trim().toLowerCase() === 'approved_for_payment' ||
-          s.properties.title.trim().toLowerCase().replace(/_/g, ' ') === 'approved for payment')
-    );
-    if (!targetSheet) {
-      targetSheet = sheetsList[0];
+    let targetSheetName = 'Payment_Complete';
+    const meta = await getGoogleSheetMetadata(spreadsheetId, accessToken);
+    if (meta.ok && meta.sheets) {
+      const match = meta.sheets.find(
+        (s: any) => s.properties && (Number(s.properties.sheetId) === 668977970 || s.properties.title === 'Payment_Complete')
+      );
+      if (match && match.properties?.title) {
+        targetSheetName = match.properties.title;
+      }
     }
-    const targetSheetName = targetSheet?.properties?.title || 'Approved_For_Payment';
 
-    // Fetch existing values in Column A..L
-    const sheetData = await getGoogleSheetData(spreadsheetId, `'${targetSheetName}'!A:L`, accessToken);
+    // Fetch existing values in Column A..M
+    const sheetData = await getGoogleSheetData(spreadsheetId, `'${targetSheetName}'!A:M`, accessToken);
     if (!sheetData.ok) {
       return res.status(200).json({
         success: false,
@@ -1604,41 +1616,30 @@ app.post('/api/sheets/append-invoice', async (req, res) => {
       return res.status(200).json({
         success: false,
         code: 'DUPLICATE',
-        userMessage: 'Invoice already exists.',
+        userMessage: 'Invoice already exists in Payment_Complete.',
         error: 'Invoice already exists.',
       });
     }
 
-    // Step 4 & Step 8: Create row array mapping:
-    // Column A = Invoice Number
-    // Column B = Supplier Name
-    // Column C = Invoice Date
-    // Column D = PO Number
-    // Column E = Invoice Amount
-    // Column F = Payment Terms
-    // Column G = Due Date
-    // Column H = Approval Status
-    // Column I = Approval Date
-    // Column J = Payment Status
-    // Column K = Last Reminder Date
-    // Column L = Payment Date
+    // Create 13-column row array mapping for Payment_Complete:
     const rowValues = [
       invoiceNumber,
       supplierName,
-      invoiceDate,
+      approvalDate,
       poNumber,
       numAmount,
       paymentTerms,
       dueDate,
-      approvalStatus,
-      approvalDate,
+      'Approved by Madam Lim',
+      todaySGT,
+      invoice.notes || 'Verified & approved for payment processing',
       paymentStatus,
-      lastReminderDate,
-      paymentDate,
+      'None',
+      paymentDate || todaySGT,
     ];
 
-    // Append row using Google Sheets API v4
-    const appendRange = `'${targetSheetName}'!A:L`;
+    // Append row using Google Sheets API v4 to Payment_Complete worksheet
+    const appendRange = `'${targetSheetName}'!A:M`;
     const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(appendRange)}:append?valueInputOption=USER_ENTERED`;
 
     const appendRes = await fetch(appendUrl, {

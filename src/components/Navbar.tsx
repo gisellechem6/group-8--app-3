@@ -83,7 +83,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={onSyncFromGoogleSheets}
             disabled={isSyncingSheets}
             className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer disabled:opacity-50"
-            title="Sync latest rows from Approved_For_Payment Google Sheet"
+            title="Sync latest rows from Matched_Results Google Sheet"
             id="btn-sync-sheets"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncingSheets ? 'animate-spin' : ''}`} />

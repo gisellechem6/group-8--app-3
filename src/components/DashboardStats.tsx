@@ -42,7 +42,7 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
         </div>
       </div>
 
-      {/* 2. Ready for Payment (3-Way Matched) */}
+      {/* 2. Ready for Payment */}
       <div
         onClick={() => onSelectCategoryFilter('ready_for_payment')}
         className={`flex items-center gap-2.5 px-3 py-1.5 rounded-lg border transition-all cursor-pointer ${
@@ -54,7 +54,7 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
       >
         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
         <div>
-          <span className="text-[10px] font-bold uppercase text-emerald-700 block leading-tight">3-Way Matched</span>
+          <span className="text-[10px] font-bold uppercase text-emerald-700 block leading-tight">Ready for Payment</span>
           <span className="font-bold text-emerald-700 font-mono text-sm">{formatSGD(metrics.readyForPaymentAmount)}</span>
           <span className="text-[10px] text-emerald-600 font-medium ml-1.5">({metrics.readyForPaymentCount} Ready)</span>
         </div>

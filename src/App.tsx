@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Invoice, FilterOptions, DashboardMetrics, InvoiceStatus, ReminderStage } from './types';
 import { initialInvoices } from './data/initialInvoices';
-import { calculateDueDate, auditInvoiceData, getDaysUntilDue, formatSingaporeDate, getEligibleReminderStage, calculateThreeWayMatch } from './utils/dateUtils';
+import { calculateDueDate, auditInvoiceData, getDaysUntilDue, formatSingaporeDate, getEligibleReminderStage } from './utils/dateUtils';
 import { Navbar } from './components/Navbar';
 import { Sidebar, StatusCounts } from './components/Sidebar';
 import { DashboardStats } from './components/DashboardStats';
@@ -56,23 +56,16 @@ export default function App() {
         }
       }
 
-      showToast('Retrieving invoices from Reviewed_Invoices and Match_Results...');
+      showToast('Retrieving invoices from Matched_Results...');
       
-      const [resReviewed, resMatch] = await Promise.all([
-        fetchGoogleSheetsWithDebug(
-          TARGET_MADAM_LIM_SHEET_ID,
-          0,
-          'Reviewed_Invoices'
-        ),
-        fetchGoogleSheetsWithDebug(
-          TARGET_MADAM_LIM_SHEET_ID,
-          1695302381,
-          'Match_Results'
-        )
-      ]);
+      const resMatch = await fetchGoogleSheetsWithDebug(
+        TARGET_MADAM_LIM_SHEET_ID,
+        1695302381,
+        'Matched_Results'
+      );
 
-      if (!resReviewed.success && !resMatch.success) {
-        const fullErr = resReviewed.error || resMatch.error || 'Failed to connect to Google Sheets API.';
+      if (!resMatch.success) {
+        const fullErr = resMatch.error || 'Failed to connect to Google Sheets API.';
         setSyncSummaryData({
           success: false,
           addedCount: 0,
@@ -90,20 +83,7 @@ export default function App() {
         return;
       }
 
-      const reviewedInvoices = resReviewed.success ? (resReviewed.invoices || []) : [];
       const matchInvoices = resMatch.success ? (resMatch.invoices || []) : [];
-
-      // Create a map of normalized invoice numbers from Match_Results to their invoice records
-      const matchInvoicesMap = new Map<string, any>();
-      matchInvoices.forEach((inv) => {
-        const num = (inv.invoiceNumber || '').toString().trim().toLowerCase();
-        if (num) {
-          matchInvoicesMap.set(num, inv);
-        }
-      });
-
-      // Create a set of normalized invoice numbers from Match_Results
-      const matchInvoiceNumbers = new Set(matchInvoicesMap.keys());
 
       let updatedCount = 0;
       let addedCount = 0;
@@ -119,21 +99,11 @@ export default function App() {
 
         const newList: Invoice[] = [];
 
-        reviewedInvoices.forEach((sheetInv, idx) => {
+        matchInvoices.forEach((sheetInv, idx) => {
           const invNumKey = (sheetInv.invoiceNumber || '').trim().toLowerCase();
           if (!invNumKey) return;
 
-          const matchInv = matchInvoicesMap.get(invNumKey);
-          const isMatchResult = !!matchInv;
-
-          // If in Match_Results, status must be 'Ready for Payment'.
-          // Otherwise, if it is 'Ready for Payment' but not in Match_Results, change to 'Unpaid'.
-          let computedStatus = sheetInv.status || 'Unpaid';
-          if (isMatchResult) {
-            computedStatus = 'Ready for Payment';
-          } else if (computedStatus === 'Ready for Payment') {
-            computedStatus = 'Unpaid';
-          }
+          const computedStatus = 'Ready for Payment';
 
           const existing = existingMap.get(invNumKey);
           if (existing) {
@@ -143,8 +113,8 @@ export default function App() {
             const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
 
             // Ensure GRN is recorded if status is Ready for Payment
-            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined) || existing.grnNumber;
-            if (computedStatus === 'Ready for Payment' && !grn) {
+            let grn = sheetInv.grnNumber || existing.grnNumber;
+            if (!grn) {
               const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
               grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
             }
@@ -189,7 +159,7 @@ export default function App() {
                   timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
                   user: 'Madam Lim (Accounts Executive)',
                   action: 'Synced from Google Sheets',
-                  details: `Synced invoice details from Google Sheet. Status set to ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  details: `Synced invoice details from Google Sheet. Status set to Ready for Payment. GRN is ${grn || 'unrecorded'}.`,
                   type: 'edit',
                 },
                 ...existing.history,
@@ -203,8 +173,8 @@ export default function App() {
             const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
 
             // Ensure GRN is recorded if status is Ready for Payment
-            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined);
-            if (computedStatus === 'Ready for Payment' && !grn) {
+            let grn = sheetInv.grnNumber;
+            if (!grn) {
               const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
               grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
             }
@@ -254,7 +224,7 @@ export default function App() {
                   timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
                   user: 'Madam Lim (Accounts Executive)',
                   action: 'Imported from Sheets',
-                  details: `Imported invoice from Google Sheet (Reviewed_Invoices). Status is ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  details: `Imported invoice from Google Sheet (Matched_Results). Status is Ready for Payment. GRN is ${grn || 'unrecorded'}.`,
                   type: 'creation',
                 },
               ],
@@ -274,12 +244,12 @@ export default function App() {
         addedCount,
         updatedCount,
         needsReviewCount: totalNeedsReviewInSync,
-        totalRowsProcessed: (resReviewed.rowsRetrieved || 0) + (resMatch.rowsRetrieved || 0),
-        sheetName: 'Reviewed_Invoices & Match_Results',
+        totalRowsProcessed: resMatch.rowsRetrieved || 0,
+        sheetName: 'Matched_Results',
         spreadsheetId: TARGET_MADAM_LIM_SHEET_ID,
       });
       setIsSyncSummaryOpen(true);
-      showToast(`Retrieved ${reviewedInvoices.length} invoices. (${matchInvoiceNumbers.size} Ready for Payment)`);
+      showToast(`Retrieved ${matchInvoices.length} invoices from Matched_Results.`);
       setActiveView('ledger');
       setFilters((prev) => ({ ...prev, status: 'Ready for Payment', needsReviewOnly: false, dueCategory: 'all' }));
     } catch (err: any) {
@@ -305,21 +275,14 @@ export default function App() {
 
       showToast('Syncing invoices from Google Sheets...');
       
-      const [resReviewed, resMatch] = await Promise.all([
-        fetchGoogleSheetsWithDebug(
-          TARGET_MADAM_LIM_SHEET_ID,
-          0,
-          'Reviewed_Invoices'
-        ),
-        fetchGoogleSheetsWithDebug(
-          TARGET_MADAM_LIM_SHEET_ID,
-          1695302381,
-          'Match_Results'
-        )
-      ]);
+      const resMatch = await fetchGoogleSheetsWithDebug(
+        TARGET_MADAM_LIM_SHEET_ID,
+        1695302381,
+        'Matched_Results'
+      );
 
-      if (!resReviewed.success && !resMatch.success) {
-        const fullErr = resReviewed.error || resMatch.error || 'Failed to connect to Google Sheets API.';
+      if (!resMatch.success) {
+        const fullErr = resMatch.error || 'Failed to connect to Google Sheets API.';
         setSyncSummaryData({
           success: false,
           addedCount: 0,
@@ -337,20 +300,7 @@ export default function App() {
         return;
       }
 
-      const reviewedInvoices = resReviewed.success ? (resReviewed.invoices || []) : [];
       const matchInvoices = resMatch.success ? (resMatch.invoices || []) : [];
-
-      // Create a map of normalized invoice numbers from Match_Results to their invoice records
-      const matchInvoicesMap = new Map<string, any>();
-      matchInvoices.forEach((inv) => {
-        const num = (inv.invoiceNumber || '').toString().trim().toLowerCase();
-        if (num) {
-          matchInvoicesMap.set(num, inv);
-        }
-      });
-
-      // Create a set of normalized invoice numbers from Match_Results
-      const matchInvoiceNumbers = new Set(matchInvoicesMap.keys());
 
       let updatedCount = 0;
       let addedCount = 0;
@@ -366,19 +316,11 @@ export default function App() {
 
         const newList: Invoice[] = [];
 
-        reviewedInvoices.forEach((sheetInv, idx) => {
+        matchInvoices.forEach((sheetInv, idx) => {
           const invNumKey = (sheetInv.invoiceNumber || '').trim().toLowerCase();
           if (!invNumKey) return;
 
-          const matchInv = matchInvoicesMap.get(invNumKey);
-          const isMatchResult = !!matchInv;
-
-          let computedStatus = sheetInv.status || 'Unpaid';
-          if (isMatchResult) {
-            computedStatus = 'Ready for Payment';
-          } else if (computedStatus === 'Ready for Payment') {
-            computedStatus = 'Unpaid';
-          }
+          const computedStatus = 'Ready for Payment';
 
           const existing = existingMap.get(invNumKey);
           if (existing) {
@@ -388,8 +330,8 @@ export default function App() {
             const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
 
             // Ensure GRN is recorded if status is Ready for Payment
-            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined) || existing.grnNumber;
-            if (computedStatus === 'Ready for Payment' && !grn) {
+            let grn = sheetInv.grnNumber || existing.grnNumber;
+            if (!grn) {
               const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
               grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
             }
@@ -434,7 +376,7 @@ export default function App() {
                   timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
                   user: 'Madam Lim (Accounts Executive)',
                   action: 'Synced from Google Sheets',
-                  details: `Synced invoice details from Google Sheet. Status set to ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  details: `Synced invoice details from Google Sheet. Status set to Ready for Payment. GRN is ${grn || 'unrecorded'}.`,
                   type: 'edit',
                 },
                 ...existing.history,
@@ -448,8 +390,8 @@ export default function App() {
             const calcDue = sheetInv.calculatedDueDate || calculateDueDate(appDate, pTerms, sheetInv.fixedDueDate);
 
             // Ensure GRN is recorded if status is Ready for Payment
-            let grn = sheetInv.grnNumber || (matchInv ? matchInv.grnNumber : undefined);
-            if (computedStatus === 'Ready for Payment' && !grn) {
+            let grn = sheetInv.grnNumber;
+            if (!grn) {
               const numPart = (sheetInv.invoiceNumber || '').replace(/[^0-9]/g, '');
               grn = `GRN-2026-${numPart.slice(-3).padStart(3, '0') || '101'}`;
             }
@@ -499,7 +441,7 @@ export default function App() {
                   timestamp: new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }),
                   user: 'Madam Lim (Accounts Executive)',
                   action: 'Imported from Sheets',
-                  details: `Imported invoice from Google Sheet (Reviewed_Invoices). Status is ${computedStatus}. GRN is ${grn || 'unrecorded'}.`,
+                  details: `Imported invoice from Google Sheet (Matched_Results). Status is Ready for Payment. GRN is ${grn || 'unrecorded'}.`,
                   type: 'creation',
                 },
               ],
@@ -519,12 +461,12 @@ export default function App() {
         addedCount,
         updatedCount,
         needsReviewCount: totalNeedsReviewInSync,
-        totalRowsProcessed: (resReviewed.rowsRetrieved || 0) + (resMatch.rowsRetrieved || 0),
-        sheetName: 'Reviewed_Invoices & Match_Results',
+        totalRowsProcessed: resMatch.rowsRetrieved || 0,
+        sheetName: 'Matched_Results',
         spreadsheetId: TARGET_MADAM_LIM_SHEET_ID,
       });
       setIsSyncSummaryOpen(true);
-      showToast(`Sync Completed: ${reviewedInvoices.length} invoices synced. (${matchInvoiceNumbers.size} Ready for Payment)`);
+      showToast(`Sync Completed: ${matchInvoices.length} invoices synced from Matched_Results.`);
     } catch (err: any) {
       const fullErr = `Sync Exception: ${err.message || String(err)}`;
       setSyncSummaryData({
@@ -602,7 +544,6 @@ export default function App() {
         cancelledAmount += amt;
       }
 
-      const match = calculateThreeWayMatch(inv);
       if (inv.status === 'Unpaid' || inv.status === 'Ready for Payment') {
         unpaid++;
         totalUnpaidAmount += amt;
@@ -733,8 +674,6 @@ export default function App() {
   // Filter Invoices for display
   const filteredInvoices = useMemo(() => {
     return invoices.filter((inv) => {
-      const match = calculateThreeWayMatch(inv);
-
       // Search
       if (filters.search.trim()) {
         const q = filters.search.toLowerCase();
@@ -911,29 +850,15 @@ export default function App() {
             bankDetails: invoiceData.bankDetails,
           });
 
-          const match = calculateThreeWayMatch({
-            ...inv,
-            ...invoiceData,
-          });
-
-          let newStatus = inv.status;
-          if (newStatus !== 'Paid' && newStatus !== 'Cancelled' && newStatus !== 'Disputed') {
-            if (match.status !== 'Matched') {
-              newStatus = 'On Hold';
-            } else if (newStatus === 'On Hold') {
-              newStatus = 'Unpaid';
-            }
-          }
-
           const updated: Invoice = {
             ...inv,
             ...invoiceData,
-            status: newStatus,
+            status: invoiceData.status || inv.status,
             calculatedDueDate: calcDue,
             needsReview: audit.needsReview,
             reviewReasons: audit.reviewReasons,
-            threeWayMatchStatus: match.status,
-            readyForPayment: match.readyForPayment,
+            threeWayMatchStatus: 'Matched',
+            readyForPayment: true,
             history: [historyEntry, ...inv.history],
           };
 
@@ -941,12 +866,23 @@ export default function App() {
             setSelectedInvoice(updated);
           }
 
+          // Auto-sync if status is updated to Paid inside Edit Form
+          if (updated.status === 'Paid' && inv.status !== 'Paid') {
+            appendApprovedInvoiceToGoogleSheet(updated)
+              .then((res) => {
+                showToast(`Auto-synced row to worksheet 'Payment_Complete'!`);
+              })
+              .catch((err) => {
+                console.log('Google Sheets auto-sync notice:', err?.message);
+              });
+          }
+
           return updated;
         })
       );
       showToast('Supplier invoice updated successfully.');
     } else {
-      // Create new: Write directly to Google Sheets Approved_For_Payment worksheet tab
+      // Create new: Write directly to Google Sheets Payment_Complete worksheet tab if Paid
       const sheetRes = await appendInvoiceToGoogleSheet(invoiceData);
 
       if (!sheetRes.success) {
@@ -1153,7 +1089,7 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* 2. Ready for Payment (3-Way Matched) */}
+                  {/* 2. Ready for Payment */}
                   <div className="bg-white p-4 rounded-2xl border border-emerald-200/80 shadow-2xs space-y-3 relative overflow-hidden">
                     <div className="w-1 h-full bg-emerald-500 absolute left-0 top-0"></div>
                     <div className="flex items-start justify-between">
@@ -1163,11 +1099,11 @@ export default function App() {
                         </div>
                         <div>
                           <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Ready for Payment</h3>
-                          <span className="text-[10px] text-emerald-600 font-semibold block">3-Way Matched (PO + GRN)</span>
+                          <span className="text-[10px] text-emerald-600 font-semibold block">Approved & Cleared</span>
                         </div>
                       </div>
                       <span className="px-2.5 py-1 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-800">
-                        {statusCounts.readyForPayment} Verified
+                        {statusCounts.readyForPayment} Approved
                       </span>
                     </div>
 
@@ -1176,7 +1112,7 @@ export default function App() {
                         {formatSGD(statusCounts.readyForPaymentAmount)}
                       </span>
                       <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                        Fully verified invoices matching PO, Goods Receipt, and unit prices.
+                        Fully approved invoices ready for payment clearance.
                       </p>
                     </div>
 
@@ -1187,7 +1123,7 @@ export default function App() {
                       }}
                       className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-bold transition-colors text-center block"
                     >
-                      View Verified Invoices →
+                      View Ready Invoices →
                     </button>
                   </div>
 

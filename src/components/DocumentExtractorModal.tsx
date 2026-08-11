@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { X, FileText, Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Sparkles, Plus, Loader2, ArrowRight, Trash2, Files, Paperclip } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Invoice, PaymentTerms, InvoiceStatus } from '../types';
-import { calculateDueDate, auditInvoiceData, calculateThreeWayMatch, getSingaporeNowFormatted } from '../utils/dateUtils';
+import { calculateDueDate, auditInvoiceData, getSingaporeNowFormatted } from '../utils/dateUtils';
 import { appendInvoiceToGoogleSheet } from '../utils/googleWorkspace';
 
 interface DocumentExtractorModalProps {
@@ -244,9 +244,7 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
         fixedDueDate: item.fixedDueDate,
         bankDetails: item.bankDetails
       });
-      const match = calculateThreeWayMatch(item);
-
-      const initialStatus: InvoiceStatus = match.status === 'Matched' ? 'Unpaid' : 'On Hold';
+      const initialStatus: InvoiceStatus = 'Unpaid';
 
       finalizedInvoices.push({
         id: `inv-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 9)}`,
@@ -265,8 +263,8 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
         poAmount: item.poAmount,
         grnNumber: item.grnNumber,
         grnVerified: item.grnVerified,
-        threeWayMatchStatus: match.status,
-        readyForPayment: match.readyForPayment,
+        threeWayMatchStatus: 'Matched',
+        readyForPayment: true,
         contactEmail: item.contactEmail || '',
         notes: item.notes || 'Batch extracted import',
         needsReview: audit.needsReview,
@@ -278,8 +276,8 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
             timestamp: now,
             user: currentUser,
             action: 'Document Extracted',
-            details: `Invoice imported & sent to Google Sheets Approved_For_Payment. Status: ${sheetResult.userMessage}`,
-            type: match.status !== 'Matched' ? 'hold' : 'creation'
+            details: `Invoice imported & sent to Google Sheets Payment_Complete. Status: ${sheetResult.userMessage}`,
+            type: 'creation'
           }
         ]
       });
@@ -564,8 +562,6 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
                     fixedDueDate: item.fixedDueDate,
                     bankDetails: item.bankDetails
                   });
-                  const match = calculateThreeWayMatch(item);
-
                   return (
                     <div key={item.tempId} className="p-4 space-y-3 bg-slate-50/50 hover:bg-slate-50 transition-colors">
                       <div className="flex items-center justify-between">
@@ -581,20 +577,15 @@ export const DocumentExtractorModal: React.FC<DocumentExtractorModalProps> = ({
                           </span>
                         </label>
                         <div className="flex items-center space-x-2">
-                          {match.readyForPayment ? (
+                          {!audit.needsReview ? (
                             <span className="px-2 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 rounded-full flex items-center space-x-1">
                               <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              <span>3-Way Matched (Ready for Payment)</span>
+                              <span>Complete Details</span>
                             </span>
                           ) : (
                             <span className="px-2 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 rounded-full flex items-center space-x-1">
                               <AlertTriangle className="w-3 h-3 text-amber-600" />
-                              <span>{match.status}</span>
-                            </span>
-                          )}
-                          {audit.needsReview && (
-                            <span className="px-2 py-0.5 text-[10px] font-medium bg-rose-100 text-rose-800 rounded-full">
-                              Needs Review
+                              <span>Incomplete / Review Needed</span>
                             </span>
                           )}
                         </div>

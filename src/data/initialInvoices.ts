@@ -1,5 +1,5 @@
 import { Invoice } from '../types';
-import { auditInvoiceData, calculateDueDate, calculateThreeWayMatch } from '../utils/dateUtils';
+import { auditInvoiceData, calculateDueDate } from '../utils/dateUtils';
 
 const baseInvoicesData: Omit<Invoice, 'needsReview' | 'reviewReasons' | 'calculatedDueDate'>[] = [
   {
@@ -115,24 +115,15 @@ export const sampleInvoices: Invoice[] = baseInvoicesData.map((inv) => {
     fixedDueDate: inv.fixedDueDate,
     bankDetails: inv.bankDetails
   });
-  const match = calculateThreeWayMatch(inv);
-
-  // For invoices that did not pass 3-way matching, automatically put them on hold
-  let updatedStatus = inv.status;
-  if (updatedStatus !== 'Paid' && updatedStatus !== 'Cancelled' && updatedStatus !== 'Disputed') {
-    if (match.status !== 'Matched') {
-      updatedStatus = 'On Hold';
-    }
-  }
 
   return {
     ...inv,
     calculatedDueDate: calcDue,
     needsReview: audit.needsReview,
     reviewReasons: audit.reviewReasons,
-    threeWayMatchStatus: match.status,
-    readyForPayment: match.readyForPayment,
-    status: updatedStatus
+    threeWayMatchStatus: 'Matched',
+    readyForPayment: true,
+    status: inv.status
   };
 });
 

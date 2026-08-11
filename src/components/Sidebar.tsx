@@ -551,7 +551,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className={`w-full py-2 px-2.5 text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-950/40 hover:bg-emerald-950/80 border border-emerald-500/30 rounded-xl font-bold flex items-center gap-2 transition-all cursor-pointer ${
               isCollapsed ? 'justify-center' : 'justify-start'
             }`}
-            title="Sync Latest Approved_For_Payment Invoices"
+            title="Sync Latest Matched_Results Invoices"
             id="btn-sidebar-sync-sheets"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />

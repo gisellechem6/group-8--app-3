@@ -390,7 +390,7 @@ export const fetchGoogleSheetsWithDebug = async (
       success: true,
       spreadsheetId: data.spreadsheetId,
       sheetName: data.sheetName,
-      requestedRange: data.requestedRange || `'${data.sheetName || 'Approved_For_Payment'}'!A:M`,
+      requestedRange: data.requestedRange || `'${data.sheetName || 'Matched_Results'}'!A:M`,
       gid: data.gid,
       rawRowsRetrieved: data.rawRowsRetrieved || 0,
       rowsRetrieved: data.rowsRetrieved || 0,
@@ -400,8 +400,8 @@ export const fetchGoogleSheetsWithDebug = async (
       debug: data.debug || {
         authStatus: 'Authenticated',
         connectionStatus: 'Connected (200 OK)',
-        sheetNameDetected: `${data.sheetName || 'Approved_For_Payment'} (gid: ${data.gid || 668977970})`,
-        requestedRange: data.requestedRange || `'${data.sheetName || 'Approved_For_Payment'}'!A:M`,
+        sheetNameDetected: `${data.sheetName || 'Matched_Results'} (gid: ${data.gid || 1695302381})`,
+        requestedRange: data.requestedRange || `'${data.sheetName || 'Matched_Results'}'!A:M`,
         rawRowsRetrieved: data.rawRowsRetrieved || 0,
         rowsRetrieved: data.rowsRetrieved || 0,
         excludedCount: data.excludedRowsLog ? data.excludedRowsLog.length : 0,
@@ -601,13 +601,25 @@ export interface AppendInvoiceResult {
 }
 
 /**
- * Append an uploaded invoice directly to Google Sheet worksheet 'Approved_For_Payment'
+ * Append an uploaded invoice directly to Google Sheet worksheet 'Payment_Complete'
+ * Only allowed if the invoice is marked as Paid, to adhere strictly to the rule of not writing to other worksheets.
  */
 export const appendInvoiceToGoogleSheet = async (
   invoice: Partial<Invoice>,
   spreadsheetId = TARGET_MADAM_LIM_SHEET_ID
 ): Promise<AppendInvoiceResult> => {
   try {
+    const isPaid = invoice.status === 'Paid';
+    if (!isPaid) {
+      // Do not write to any other worksheets. Just return a simulated success.
+      return {
+        success: true,
+        code: 'SUCCESS',
+        userMessage: 'Invoice successfully saved locally (skipped Google Sheets append to avoid writing to non-Paid worksheets per guidelines).',
+        invoice,
+      };
+    }
+
     const token = await getAccessToken();
     if (!token) {
       return {
@@ -710,7 +722,26 @@ export const appendApprovedInvoiceToGoogleSheet = async (
   // Try 2: Direct Google Sheets API call if user is signed in with OAuth
   const token = await getAccessToken();
   if (token) {
-    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/A1:M1:append?valueInputOption=USER_ENTERED`;
+    let targetSheetName = 'Payment_Complete';
+    try {
+      const metaRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (metaRes.ok) {
+        const metaData = await metaRes.json();
+        const match = metaData.sheets?.find(
+          (s: any) => s.properties && (Number(s.properties.sheetId) === 668977970 || s.properties.title === 'Payment_Complete')
+        );
+        if (match && match.properties?.title) {
+          targetSheetName = match.properties.title;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to retrieve spreadsheet metadata, falling back to Payment_Complete:', e);
+    }
+
+    const appendRange = `'${targetSheetName}'!A:M`;
+    const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(appendRange)}:append?valueInputOption=USER_ENTERED`;
     const res = await fetch(appendUrl, {
       method: 'POST',
       headers: {
@@ -726,7 +757,7 @@ export const appendApprovedInvoiceToGoogleSheet = async (
       return {
         success: true,
         method: 'sheets_api',
-        message: `Appended row for ${invoice.invoiceNumber} directly to Madam Lim's Google Sheet (${spreadsheetId}).`,
+        message: `Appended row for ${invoice.invoiceNumber} directly to worksheet '${targetSheetName}' in Google Sheet (${spreadsheetId}).`,
       };
     } else {
       const errText = await res.text();

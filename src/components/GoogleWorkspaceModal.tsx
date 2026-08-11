@@ -56,7 +56,11 @@ const APPS_SCRIPT_CODE = `/**
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = spreadsheet.getSheetByName("Payment_Complete");
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet("Payment_Complete");
+    }
     
     // Auto-create 13-column headers if sheet is empty
     if (sheet.getLastRow() === 0) {
@@ -156,19 +160,19 @@ export const GoogleWorkspaceModal: React.FC<GoogleWorkspaceModalProps> = ({
     setIsTestingSheets(true);
     setTestResult(null);
     try {
-      const res = await testGoogleSheetsConnection(TARGET_MADAM_LIM_SHEET_ID, 0);
+      const res = await testGoogleSheetsConnection(TARGET_MADAM_LIM_SHEET_ID, 1695302381);
       setTestResult(res);
       setDebugInfo({
         authStatus: res.isAuthenticated ? 'Authenticated' : 'Not Authenticated',
         connectionStatus: res.success ? 'Connected (200 OK)' : `Failed (HTTP ${res.apiResponseStatus})`,
-        sheetNameDetected: res.selectedSheetName || 'Reviewed_Invoices',
-        requestedRange: res.requestedRange || `'Reviewed_Invoices'!A:Z`,
+        sheetNameDetected: res.selectedSheetName || 'Matched_Results',
+        requestedRange: res.requestedRange || `'Matched_Results'!A:Z`,
         rawRowsRetrieved: res.rawRowsRetrieved ?? res.totalRowsRetrieved + 1,
         rowsRetrieved: res.totalRowsRetrieved,
         error: res.fullError,
       });
       if (res.success) {
-        onShowToast(`Connection Test OK: Retrieved ${res.totalRowsRetrieved} invoice records from range '${res.requestedRange || "'Reviewed_Invoices'!A:Z"}'`);
+        onShowToast(`Connection Test OK: Retrieved ${res.totalRowsRetrieved} invoice records from range '${res.requestedRange || "'Matched_Results'!A:Z"}'`);
       } else {
         onShowToast(`Connection Test Failed: ${res.fullError?.substring(0, 80)}`);
       }
@@ -184,13 +188,13 @@ export const GoogleWorkspaceModal: React.FC<GoogleWorkspaceModalProps> = ({
     setIsDebugging(true);
     const result = await fetchGoogleSheetsWithDebug(
       TARGET_MADAM_LIM_SHEET_ID,
-      0,
-      'Reviewed_Invoices'
+      1695302381,
+      'Matched_Results'
     );
     setDebugInfo(result.debug);
     setIsDebugging(false);
     if (result.success) {
-      onShowToast(`Debug Check OK: ${result.rowsRetrieved} invoice records retrieved from range '${result.requestedRange || "'Reviewed_Invoices'!A:Z"}'`);
+      onShowToast(`Debug Check OK: ${result.rowsRetrieved} invoice records retrieved from range '${result.requestedRange || "'Matched_Results'!A:Z"}'`);
     }
   };
 
@@ -600,7 +604,7 @@ export const GoogleWorkspaceModal: React.FC<GoogleWorkspaceModalProps> = ({
                     <Code2 className="w-5 h-5 text-amber-400 shrink-0" />
                     <div>
                       <h4 className="font-bold text-sm text-amber-300">Google Sheets Integration Debugger</h4>
-                      <p className="text-[11px] text-slate-400">Live connection diagnostic for Spreadsheet ID: <code className="text-amber-200">{TARGET_MADAM_LIM_SHEET_ID}</code> (gid: 0, Reviewed_Invoices)</p>
+                      <p className="text-[11px] text-slate-400">Live connection diagnostic for Spreadsheet ID: <code className="text-amber-200">{TARGET_MADAM_LIM_SHEET_ID}</code> (gid: 1695302381, Matched_Results)</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -643,7 +647,7 @@ export const GoogleWorkspaceModal: React.FC<GoogleWorkspaceModalProps> = ({
                   <div className="p-2.5 bg-slate-950/80 rounded-xl border border-slate-800">
                     <span className="text-slate-400 text-[10px] uppercase font-sans tracking-wider block font-semibold">3. Requested Range</span>
                     <span className="text-amber-300 font-bold truncate block">
-                      {debugInfo.requestedRange || `'Approved_For_Payment'!A:Z`}
+                      {debugInfo.requestedRange || `'Payment_Complete'!A:Z`}
                     </span>
                   </div>
 
@@ -860,7 +864,7 @@ export const GoogleWorkspaceModal: React.FC<GoogleWorkspaceModalProps> = ({
                 <div>
                   <p className="font-bold text-emerald-900">Live Google Sheets Ledger Export</p>
                   <p className="text-emerald-800 mt-0.5">
-                    Generates a structured Google Sheet with 14 verified columns (Invoice Number, Supplier, SGD Amount, Status, Due Date, PO/GRN matching status, and Bank details).
+                    Generates a structured Google Sheet with 14 verified columns (Invoice Number, Supplier, SGD Amount, Status, Due Date, Verification status, and Bank details).
                   </p>
                 </div>
               </div>
